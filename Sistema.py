@@ -36,7 +36,6 @@ class System:
         self.time_interval=np.array([0.0001])
         self.numit=0
         self.ints=[]
-        #print('WARNING!!\nCheck value time for first action limitation in limit action function')
 
     def setup_compensator(self,syst_obj,optimized_params=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]):
         self.compensator.setup(syst_obj,optimized_params)
@@ -131,23 +130,18 @@ class System:
 def limit_control_action(action_y,pos,t,limit_values,time_interval,limit_bool):
     value=action_y[-1]
     if limit_bool:
-        #print('action',value,'max_speed',limit_values[0])
 
         if np.abs(value)>limit_values[0]:
-            #print('checked1')
             value=limit_values[-1]*value/np.abs(value)
         if len(pos)==1:
 
             if np.abs(value/time_interval)*params.J>limit_values[1]:
-                #print('checked2')
                 value=limit_values*time_interval*value/np.abs(value)
         else:
             prev_velocity=(pos[-1]-pos[-2])/(t[-1]-t[-2])
             if np.abs(((value-prev_velocity)/(t[-1]-t[-2])))*params.J>limit_values[1]:
-                #print('checked3',prev_velocity)
                 value=limit_values[1]*(t[-1]-t[-2])*((value-prev_velocity)/np.abs(value-prev_velocity))\
                       /params.J+prev_velocity
-            #print('torque',(value-prev_velocity)*params.J/(t[-1]-t[-2]))
     return value
 
 class Barry:  # Classe para cenas de eletronica tipo receber dados do encoder e outros sensores
