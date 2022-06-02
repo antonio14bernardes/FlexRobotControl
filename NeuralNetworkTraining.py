@@ -10,10 +10,11 @@ import numpy as np
 def main():
     model=NN_Compensator()
     model.add_LSTM(10)
-    model.add_dense(4,'relu')
-    model.add_dense(1,'sigmoid')
-    optimizer = tf.keras.optimizers.SGD(learning_rate=1e-20)
-    loss_fn = tf.keras.losses.MeanSquaredError()
+    model.add_dense(4,'tanh')
+    model.add_dense(1,'tanh')
+    optimizer = tf.keras.optimizers.Adagrad(learning_rate=1e-3)
+    #loss_fn = tf.keras.losses.MeanSquaredError()
+    loss_fn=custom_loss_literalytheabsvalue
     loss_metric = tf.keras.metrics.Mean()
 
     syst=sist.System
@@ -22,7 +23,7 @@ def main():
     refs=np.ones((1,1))
 
     trainer=NN_Coach(model,optimizer,loss_fn,loss_metric,syst,controller)
-    trainer.train_as_comp(refs,update_weights_each_point=False,epochs=1000000,break_combo='ctrl+2')
+    trainer.train(refs,train_mode='comp',update_weights_each_point=True,epochs=1000000,break_combo='ctrl+2')
 
 class NN_Compensator(keras.Model):
     def __init__(self):
@@ -56,15 +57,32 @@ class NN_Coach:
         self.controller=controller
         self.const_t_int=const_t_int
 
-    def train_as_comp(self, refs, epochs, update_weights_each_point=False, break_combo='ctrl+2'):
+    def train(self, refs, epochs, train_mode,loss_thresh=0.0, update_weights_each_point=False, break_combo='ctrl+2'):
         # Iterate over epochs.
         key_press = False
+        good_enough=False
+
         if update_weights_each_point:
-            gradient_fnc_in_loop=train_and_loss_metric
-            gradient_fnc_out_loop=useless_function
+            self.get_grads=substitute_grads
+            self.update_weights_in_loop=update_weights
+            self.update_weights_out_loop=useless_function
+
         else:
-            gradient_fnc_out_loop=train_and_loss_metric
-            gradient_fnc_in_loop=useless_function
+            self.get_grads=update_grads
+            self.update_weights_in_loop=useless_function
+            self.update_weights_out_loop=update_weights
+
+        if train_mode=='compensator' or train_mode=='comp':
+            self.get_comp=comp_fnc
+            self.get_ref_update=comp_update_ref
+            self.get_control_action=comp_control_action
+            self.get_motor_estimate=comp_estimate_motor
+
+        elif train_mode=='controller' or train_mode=='cont':
+            self.get_comp=useless_function
+            self.get_ref_update=cont_update_ref
+            self.get_control_action=cont_control_action
+            self.get_motor_estimate=cont_estimate_motor
 
         for epoch in range(epochs):
 
@@ -87,102 +105,91 @@ class NN_Coach:
                               prep_input_fnc=self.prepare_input, const_time_int=self.const_t_int, num_samples=100)
 
             syst.start()
-            loss = 0
+            grads=np.zeros_like(self.model.trainable_weights)
+            total_loss = 0
             # Iterate over the batches of the dataset. #WARNING!!!!! Not yet prepared for batch training
-
-            with tf.GradientTape() as tape:
-                while syst.times[-1] < 2:
+            while syst.times[-1] < 2:
+                with tf.GradientTape() as tape:
                     X_input = self.prepare_input(data)
-                    comp = self.model(X_input)
-                    syst.update_ref(refs, comp)
-                    syst.control()
+                    comp = self.get_comp(self.model,X_input)
+                    self.get_ref_update(syst,refs, comp)
+                    action=self.get_control_action(syst,self.model,X_input)
                     self.times_update()
-                    syst.estimate_motor_angle()
+                    self.get_motor_estimate(syst,action)
                     syst.estimate_tip_angle()
-                    loss += self.loss_fn(refs, syst.tip_angle[-1])
-                    gradient_fnc_in_loop(loss, self.model, tape, self.optimizer, self.loss_metric)
+                    loss = self.loss_fn(refs, syst.tip_angle[-1])
+                    total_loss+=loss
+                    #print('loss',loss)
+                    #print('total loss',total_loss)
+                    grads=self.get_grads(grads,self.model,loss,tape)
+                    self.update_weights_in_loop(grads,self.model,self.optimizer)
+                    #gradient_fnc_in_loop(self.loss_fn(refs, syst.tip_angle[-1]), self.model, tape, self.optimizer, self.loss_metric)
 
-            gradient_fnc_out_loop(loss,self.model,tape,self.optimizer,self.loss_metric)
+            self.update_weights_out_loop(grads,self.model,self.optimizer)
+            #gradient_fnc_out_loop(loss,self.model,tape,self.optimizer,self.loss_metric)
 
-            if keyboard.is_pressed(break_combo):
+            if self.loss_metric.result()<loss_thresh:
+                good_enough=True
+                break
+
+            elif keyboard.is_pressed(break_combo):
                 key_press = True
                 print('Keyboard Interrupt')
                 break
 
-            print("epoch %d: mean loss = %.4f" % (epoch, self.loss_metric.result()))
+            print("epoch %d: mean loss = %.4f" % (epoch, total_loss)) #self.loss_metric.result()
 
+        if good_enough:
+            #self.model.save("C:/Users/anton_n9xdx5h/PycharmProjects/RobotFlexivel/")
+            print('good enough')
         plt.plot(syst.times, syst.tip_angle)
         plt.show()
-        save=input('Save model? y/n')
-        if save=='y':
-            self.model.save("C:/Users/anton_n9xdx5h/PycharmProjects/RobotFlexivel/saved_model_comp")
 
-    def train_as_cont(self, refs, epochs, update_weights_each_point=False, break_combo='ctrl+2'):
-        # Iterate over epochs.
-        key_press = False
-        if update_weights_each_point:
-            gradient_fnc_in_loop = train_and_loss_metric
-            gradient_fnc_out_loop = useless_function
-        else:
-            gradient_fnc_out_loop = train_and_loss_metric
-            gradient_fnc_in_loop = useless_function
+        if key_press:
+            save=input('Save model? y/n')
+            if save=='y':
+                #self.model.save("C:/Users/anton_n9xdx5h/PycharmProjects/RobotFlexivel/")
+                pass
 
-        for epoch in range(epochs):
+def custom_loss_literalytheabsvalue(real,pred):
+    if real-pred<0:
+        return pred-real
+    else:
+        return real-pred
+def comp_estimate_motor(syst,action):
+    syst.estimate_motor_angle()
 
-            print("Start of epoch %d" % (epoch,))
-            syst = self.syst(self.controller())
-            self.data = syst.motor_angle
+def cont_estimate_motor(syst,action):
+    syst.estimate_motor_angle_NN_cont(action)
 
-            syst_test = self.syst(self.controller())
-            data_test = [syst_test.motor_angle, syst_test.tip_angle]
-            data = [syst.motor_angle, syst.tip_angle]
+def comp_control_action(syst,model,input):
+    syst.control()
 
-            if self.const_t_int:
-                self.times_update = syst.update_times_constant_interval
-                self.get_interval = syst.get_initial_time_gap_NN_comp
-            else:
-                self.times_update = syst.update_times
-                self.get_interval = useless_function
+def cont_control_action(syst,model,input):
+    return model(input)
 
-            self.get_interval(model=self.model, test_syst=syst_test, data=data_test,
-                              prep_input_fnc=self.prepare_input, const_time_int=self.const_t_int, num_samples=100)
+def comp_update_ref(syst, refs, comp):
+    syst.update_ref(refs, comp)
 
-            syst.start()
-            loss = 0
-            # Iterate over the batches of the dataset. #WARNING!!!!! Not yet prepared for batch training
+def cont_update_ref(syst,refs,comp):
+    syst.update_ref(refs,0)
 
-            with tf.GradientTape() as tape:
-                while syst.times[-1] < 2:
-                    X_input = self.prepare_input(data)
-                    #comp = self.model(X_input)
-                    syst.update_ref(refs, 0)
-                    syst.control()
-                    self.times_update()
-                    action=self.model(X_input)
-                    syst.estimate_motor_angle_NN_cont(action)
-                    syst.estimate_tip_angle()
-                    loss += self.loss_fn(refs, syst.tip_angle[-1])
-                    gradient_fnc_in_loop(loss, self.model, tape, self.optimizer, self.loss_metric)
+def comp_fnc(model,input):
+    return model(input)
 
-            gradient_fnc_out_loop(loss, self.model, tape, self.optimizer, self.loss_metric)
+def update_grads(grads,model,loss,tape):
+    return grads+tape.gradient(loss, model.trainable_weights)
 
-            if keyboard.is_pressed(break_combo):
-                key_press = True
-                print('Keyboard Interrupt')
-                break
+def substitute_grads(grads,model,loss,tape):
+    return  tape.gradient(loss, model.trainable_weights)
 
-            print("epoch %d: mean loss = %.4f" % (epoch, self.loss_metric.result()))
-
-        plt.plot(syst.times, syst.tip_angle)
-        plt.show()
-        save = input('Save model? y/n')
-        if save == 'y':
-            self.model.save("C:/Users/anton_n9xdx5h/PycharmProjects/RobotFlexivel/saved_model_cont")
+def update_weights(grads,model,optimizer):
+    optimizer.apply_gradients(zip(grads, model.trainable_weights))
 
 def train_and_loss_metric(loss,model,tape,optimizer,loss_metric):
     grads = tape.gradient(loss, model.trainable_weights)
     optimizer.apply_gradients(zip(grads, model.trainable_weights))
-    loss_metric(loss)
+    #loss_metric(loss)
 
 def LSTM_prep_input(input_data):
 
