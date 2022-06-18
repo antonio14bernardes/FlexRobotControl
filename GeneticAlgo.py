@@ -7,15 +7,15 @@ import keyboard
 
 #Problem definition
 problem = structure()
-problem.nvar=3 #15 #num of decision variables
-problem.varmin = [250,20,5]#[-100,-100,-100,-100,-100,-100,-100,-100,-100,-100,-100,-100,-100,-100,-100] #0 #lower bound for decision variables
-problem.varmax = [400,40,15]#[100,100,100,100,100,100,100,100,100,100,100,100,100,100,100]#500 #upper bound for decision variables
+problem.nvar=1 #15 #num of decision variables
+problem.varmin = [0]#[100,0.1]#[-100,-100,-100,-100,-100,-100,-100,-100,-100,-100,-100,-100,-100,-100,-100] #0 #lower bound for decision variables
+problem.varmax = [1]#[200,0.9]#[100,100,100,100,100,100,100,100,100,100,100,100,100,100,100]#500 #upper bound for decision variables
 
 #GA Parameters
 params = structure()
-params.maxit = 20 #max num of iterations
-params.npop = 25 #Initial population size
-params.pc = 10
+params.maxit = 30 #max num of iterations
+params.npop = 15 #Initial population size
+params.pc = 7
 params.start_gamma=-0.5
 params.end_gamma=0.4
 params.start_mu = 0.5
@@ -25,24 +25,28 @@ params.sigma= 0.2
 def main():
     out=run(problem,params,system)
     sys_out=system(ks=out.bestsol.position)
-    y,t,overshoot,settling_time,avg_error=sys_out.motor_angle,sys_out.times,\
-                sys_out.motor_analyser.overshoot,sys_out.motor_analyser.settling_time,sys_out.motor_analyser.avg_error
-    print(out.bestsol.position)
-    print(overshoot,settling_time,avg_error)
+    y,motor,t,overshoot,settling_time,avg_error=sys_out.tip_angle,sys_out.motor_angle,sys_out.times,\
+                sys_out.tip_analyser.overshoot,sys_out.tip_analyser.settling_time,sys_out.tip_analyser.avg_error
+    print('Best Position',out.bestsol.position)
+    print('Overshoot',overshoot,'Settling time',settling_time,'Average error',avg_error)
     print('Max speed', np.max(np.abs(sys_out.motor_analyser.velocity)),
           'Max torque', np.max(np.abs(sys_out.motor_analyser.torque)))
-    plt.plot(t,y)
+    plt.plot(t,y,label='tip')
+    plt.plot(t,motor,label='motor')
+    plt.legend()
     plt.show()
 
 #System to optimize
 def system(ks):
-    controller = cont.PID(ks)
+    #coefs=[1,2*ks[1]/ks[0],1/(ks[0]**2)]
+    coefs=[1,ks[0]]
+    controller = cont.PID([236.71653478, 24.59454428, 7.24508008])
     syst = sist.System(controller)
-    syst.setup_compensator(syst)
+    syst.setup_compensator(syst,optimized_params=coefs)
     syst.get_initial_time_gap(sist.System,num_samples=100)
     syst.start()
     i=0
-    while syst.times[-1]<0.3:
+    while syst.times[-1]<0.5:
         i+=1
         syst.compensate_ref()
         syst.control()
@@ -58,13 +62,13 @@ def system(ks):
 
 #Cost function
 def calculate_cost(x,sys,return_info=False,constraint_limits=None):
-    overshoot_penalty=1
-    settling_time_penalty=1000
+    overshoot_penalty=100000000
+    settling_time_penalty=10
     avg_error_penalty=1
     #_,_,overshoot,settling_time,summed_error=sys(x)
     out = sys(x)
-    overshoot,settling_time,avg_error = out.motor_analyser.overshoot, \
-                        out.motor_analyser.settling_time, out.motor_analyser.avg_error
+    overshoot,settling_time,avg_error = out.tip_analyser.overshoot, \
+                        out.tip_analyser.settling_time, out.tip_analyser.avg_error
 
     cost=np.absolute(overshoot)*overshoot_penalty+settling_time*settling_time_penalty\
          +np.absolute(avg_error)*avg_error_penalty
@@ -121,7 +125,7 @@ def run(problem, params, sys,constraint_limits=[3000,0.159]):
     pop = empty_individual.repeat(npop)
     print('pop init')
     for i in range(0,npop):
-        #print(i)
+        print(i,'out of',npop)
         num_tries=0
         check_constraints=False
         while not check_constraints:
@@ -143,7 +147,7 @@ def run(problem, params, sys,constraint_limits=[3000,0.159]):
     bestcost=np.empty(maxit)
     print('entering iteration loop')
     for it in range(maxit):
-        #print('iteration',it, 'out of', maxit)
+        print('iteration',it, 'out of', maxit)
         popc = []
 
         gamma=linear_update_param(start_gamma, end_gamma, it, maxit)
@@ -152,7 +156,7 @@ def run(problem, params, sys,constraint_limits=[3000,0.159]):
         print('mu',mu)
 
         for _ in range(nc//2):
-            #print('nc', _, 'out of', nc//2 )
+            print('nc', _, 'out of', nc//2 )
             q = np.random.permutation(npop)
             p1=pop[q[0]]
             p2=pop[q[1]]

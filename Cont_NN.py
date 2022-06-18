@@ -49,6 +49,12 @@ class Analysis:
         self.calc_1 = Calculus()
         self.calc_2 = Calculus()
 
+        self.real_time_calc=Calculus()
+
+    def get_velocity(self,y,t):
+        self.real_time_calc.get_real_derivative(y,t)
+        self.velocity=self.real_time_calc.derivative
+
     def analyse(self, y, t, ss_value=1):
         overshoot = (np.max(y) - ss_value) / ss_value
         max_y = np.max(y)
@@ -192,7 +198,6 @@ def euler_update(times, prev_y, latest_input, coefs, subit=5):
             new_ys.append(new)
         new_highest_order /= coefs[-1]
         new_ys.append(new_highest_order)
-    #print('from euler function',new_ys)
     return new_ys
 
 def modified_euler_update(times, prev_y, latest_input, coefs,subit=10):
@@ -332,16 +337,3 @@ def sigmoid_comp(syst_obj, times_ref_change, parameters):
     t = syst_obj.times[-1] - times_ref_change[-1]
     new_comp = k1 * (1 - 1 / (1 + math.e ** (-k2 * (t - t_offset))))
     return new_comp
-
-
-
-
-
-
-
-class tryer:
-    def __init__(self):
-        self.value=0
-
-    def tries(self,ref,comp):
-        self.value=ref-comp

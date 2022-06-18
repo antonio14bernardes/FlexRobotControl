@@ -6,7 +6,7 @@ import Parameters as params
 #import RPi.GPIO as GPIO
 
 class System:
-    def __init__(self, controller,limit_action=False):
+    def __init__(self, controller,compensator='trace tf',limit_action=False):
         # Propriedades do material
         self.E = params.E  # Módulo de Young              INPUT GPa
         # Dimensões da viga
@@ -24,7 +24,7 @@ class System:
         self.limit_action = limit_action
         self.tip_estimator=cont.Estimator(function='tip',method='Modified Euler')
         self.motor_estimator=cont.Estimator(function='servo',method='Modified Euler')
-        self.compensator = cont.Compensator()
+        self.compensator = cont.Compensator(compensator)
         self.motor_analyser=cont.Analysis()
         self.tip_analyser=cont.Analysis()
         #Initial values
@@ -36,6 +36,7 @@ class System:
         self.time_interval=np.array([0.0001])
         self.numit=0
         self.ints=[]
+        #print('WARNING!!\nCheck value time for first action limitation in limit action function')
 
     def setup_compensator(self,syst_obj,optimized_params=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]):
         self.compensator.setup(syst_obj,optimized_params)
@@ -75,7 +76,7 @@ class System:
         controller = cont.PID(K=[206.71653478, 24.59454428, 7.24508008])
         syst_test=test_syst(controller)
         #print(syst_test)
-        syst_test.setup_compensator(syst_test, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        syst_test.setup_compensator(syst_test, optimized_params=[1,2*0.6/20,1/(20**2)])
         syst_test.start()
         for i in range(num_samples):
             syst_test.compensate_ref()
@@ -87,11 +88,43 @@ class System:
         current=time.time()
         self.time_interval=np.array([(current-syst_test.start_time)/num_samples])
 
+    def get_initial_time_gap_LQR(self,test_syst,num_samples=10000):
+        controller = cont.LQR()
+        syst_test=test_syst(controller,compensator='ignore')
+        #print(syst_test)
+        #syst_test.setup_compensator(syst_test, optimized_params=[1,2*0.6/20,1/(20**2)])
+        syst_test.setup_compensator(syst_test, optimized_params=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0])
+        syst_test.start()
+        for i in range(num_samples):
+            syst_test.compensate_ref()
+            syst_test.control()
+            syst_test.update_times_constant_interval()
+            syst_test.estimate_motor_angle()
+            syst_test.estimate_tip_angle()
+            syst_test.update_ref()
+        current=time.time()
+        self.time_interval=np.array([(current-syst_test.start_time)/num_samples])
+
+    def get_initial_time_gap_flexible(self,syst_test,num_samples=10000):  #NOT YET READY BUT SHOULD BE VERY USEFUL
+
+        syst_test.start()
+        for i in range(num_samples):
+            syst_test.compensate_ref()
+            syst_test.control()
+            syst_test.update_times_constant_interval()
+            syst_test.estimate_motor_angle()
+            syst_test.estimate_tip_angle()
+            syst_test.update_ref()
+        current=time.time()
+        self.time_interval=np.array([(current-syst_test.start_time)/num_samples])
     def compensate_ref(self):
         self.compensator.compensate()
         
     def control(self):
-        self.controller.get_action(self.compensator.comp_ref,self.motor_angle,self.times) #CHanged to motor angle
+        if isinstance(self.controller,cont.PID):
+            self.controller.get_action(self.compensator.comp_ref,self.motor_angle,self.times)
+        if isinstance(self.controller,cont.LQR):
+            self.controller.get_action(self.compensator.comp_ref,self.tip_angle,self.motor_angle,self.times)  #created for lqr
         self.controller_output=np.append(self.controller_output,limit_control_action(self.controller.action,
                         self.motor_angle,self.times,params.limit_values,self.time_interval,self.limit_action))
 
@@ -130,18 +163,23 @@ class System:
 def limit_control_action(action_y,pos,t,limit_values,time_interval,limit_bool):
     value=action_y[-1]
     if limit_bool:
+        #print('action',value,'max_speed',limit_values[0])
 
         if np.abs(value)>limit_values[0]:
+            #print('checked1')
             value=limit_values[-1]*value/np.abs(value)
         if len(pos)==1:
 
             if np.abs(value/time_interval)*params.J>limit_values[1]:
+                #print('checked2')
                 value=limit_values*time_interval*value/np.abs(value)
         else:
             prev_velocity=(pos[-1]-pos[-2])/(t[-1]-t[-2])
             if np.abs(((value-prev_velocity)/(t[-1]-t[-2])))*params.J>limit_values[1]:
+                #print('checked3',prev_velocity)
                 value=limit_values[1]*(t[-1]-t[-2])*((value-prev_velocity)/np.abs(value-prev_velocity))\
                       /params.J+prev_velocity
+            #print('torque',(value-prev_velocity)*params.J/(t[-1]-t[-2]))
     return value
 
 class Barry:  # Classe para cenas de eletronica tipo receber dados do encoder e outros sensores
@@ -150,8 +188,8 @@ class Barry:  # Classe para cenas de eletronica tipo receber dados do encoder e 
         self.angular_velocity = angular_velocity  # In rot per sec
         max_pps = 250 * 10 ** 3
         self.pps = self.angular_velocity * self.ppr
-        print('freq = ',self.pps)
-        print('period = ',1/self.pps)
+        #print('freq = ',self.pps)
+        #print('period = ',1/self.pps)
         if self.pps > max_pps:
             max_velocity= max_pps/self.ppr
             raise Exception(f"Pulses per second are set too high (limit = {max_velocity} rot/s or = 250 kpps)")
@@ -201,7 +239,7 @@ class Barry:  # Classe para cenas de eletronica tipo receber dados do encoder e 
         f.write('')
         f.close()
         
-        print('setup done')
+        #print('setup done')
     def send_position_increment(self, increment):
         no_pulses = self.ppr * increment / 360
         self.send_pulses(no_pulses, self.pps, [self.pc1, self.pc1_, self.pc2, self.pc2_], duty_cycle=self.duty_cycle)

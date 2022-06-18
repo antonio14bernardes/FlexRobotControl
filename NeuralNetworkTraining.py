@@ -9,21 +9,23 @@ import numpy as np
 
 def main():
     model=NN_Compensator()
-    model.add_LSTM(10)
-    model.add_dense(4,'tanh')
-    model.add_dense(1,'tanh')
-    optimizer = tf.keras.optimizers.Adagrad(learning_rate=1e-3)
+    #model.add_LSTM(8)
+    model.add_dense(5,'tanh')
+    model.add_dense(3,'tanh')
+    model.add_dense(1,'linear')
+    optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)#,beta_1=0.98,beta_2=0.88)
+    #optimizer = tf.keras.optimizers.RMSprop(learning_rate=1e-3,rho=0.9,momentum=0.0)
     #loss_fn = tf.keras.losses.MeanSquaredError()
-    loss_fn=custom_loss_literalytheabsvalue
+    loss_fn=custom_loss_literalythesqrloss_scalar
     loss_metric = tf.keras.metrics.Mean()
 
     syst=sist.System
     controller=cont.PID
 
-    refs=np.ones((1,1))
+    refs=[1]
 
     trainer=NN_Coach(model,optimizer,loss_fn,loss_metric,syst,controller)
-    trainer.train(refs,train_mode='comp',update_weights_each_point=True,epochs=1000000,break_combo='ctrl+2')
+    trainer.train(refs_input=refs,train_mode='cont',update_weights_each_point=False,loss_thresh=0.01,epochs=1000000,break_combo='ctrl+2')
 
 class NN_Compensator(keras.Model):
     def __init__(self):
@@ -37,6 +39,9 @@ class NN_Compensator(keras.Model):
     def add_LSTM(self,num_cells):
         self.layer_list.append(keras.layers.LSTM(num_cells,dtype='float32'))
 
+    def add_simpleRNN(self,num_cells):
+        self.layer_list.append(keras.layers.SimpleRNN(num_cells,dtype='float32'))
+
     def call(self,inputs):
         x_pass=inputs
         for layer in self.layer_list:
@@ -45,7 +50,7 @@ class NN_Compensator(keras.Model):
 
 class NN_Coach:
     def __init__(self,model,optimizer,loss_fn,loss_metric,syst,controller=None,const_t_int=True):
-        if isinstance(model.layer_list[0],keras.layers.LSTM):
+        if isinstance(model.layer_list[0],keras.layers.LSTM) or isinstance(model.layer_list[0],keras.layers.SimpleRNN):
             self.prepare_input=LSTM_prep_input
         elif isinstance(model.layer_list[0],keras.layers.Dense):
             self.prepare_input=dense_prep_input
@@ -57,10 +62,12 @@ class NN_Coach:
         self.controller=controller
         self.const_t_int=const_t_int
 
-    def train(self, refs, epochs, train_mode,loss_thresh=0.0, update_weights_each_point=False, break_combo='ctrl+2'):
+    def train(self, refs_input, epochs, train_mode,loss_thresh=0.0, update_weights_each_point=False, break_combo='ctrl+2'):
         # Iterate over epochs.
         key_press = False
         good_enough=False
+
+        refs_array=np.random.choice(refs_input,size=epochs)
 
         if update_weights_each_point:
             self.get_grads=substitute_grads
@@ -91,8 +98,13 @@ class NN_Coach:
             self.data = syst.motor_angle
 
             syst_test = self.syst(self.controller())
-            data_test = [syst_test.motor_angle, syst_test.tip_angle]
-            data = [syst.motor_angle, syst.tip_angle]
+
+            refs_test=[refs_array[epoch]]
+            refs=[refs_array[epoch]]
+
+            data_test = [refs_test,syst_test.motor_angle, syst_test.tip_angle,
+                         syst_test.motor_velocity,syst_test.tip_velocity,syst_test.times] #NOTA: REFS E REFS_TEST TEM DE SER PRIMEIRO ELEMENTO NA LISTA
+            data = [refs,syst.motor_angle, syst.tip_angle, syst.motor_velocity,syst.tip_velocity,syst.times]
 
             if self.const_t_int:
                 self.times_update = syst.update_times_constant_interval
@@ -112,23 +124,23 @@ class NN_Coach:
                 with tf.GradientTape() as tape:
                     X_input = self.prepare_input(data)
                     comp = self.get_comp(self.model,X_input)
-                    self.get_ref_update(syst,refs, comp)
+                    self.get_ref_update(syst,refs[-1], comp)
                     action=self.get_control_action(syst,self.model,X_input)
                     self.times_update()
                     self.get_motor_estimate(syst,action)
                     syst.estimate_tip_angle()
-                    loss = self.loss_fn(refs, syst.tip_angle[-1])
+                    refs.append(refs[0])
+                    loss = self.loss_fn(refs[-1], syst.tip_angle[-1])
                     total_loss+=loss
-                    #print('loss',loss)
-                    #print('total loss',total_loss)
+
                     grads=self.get_grads(grads,self.model,loss,tape)
                     self.update_weights_in_loop(grads,self.model,self.optimizer)
-                    #gradient_fnc_in_loop(self.loss_fn(refs, syst.tip_angle[-1]), self.model, tape, self.optimizer, self.loss_metric)
+
 
             self.update_weights_out_loop(grads,self.model,self.optimizer)
-            #gradient_fnc_out_loop(loss,self.model,tape,self.optimizer,self.loss_metric)
 
-            if self.loss_metric.result()<loss_thresh:
+
+            if total_loss<loss_thresh:
                 good_enough=True
                 break
 
@@ -142,6 +154,8 @@ class NN_Coach:
         if good_enough:
             #self.model.save("C:/Users/anton_n9xdx5h/PycharmProjects/RobotFlexivel/")
             print('good enough')
+            print('Loss',total_loss)
+
         plt.plot(syst.times, syst.tip_angle)
         plt.show()
 
@@ -156,6 +170,10 @@ def custom_loss_literalytheabsvalue(real,pred):
         return pred-real
     else:
         return real-pred
+
+def custom_loss_literalythesqrloss_scalar(real,pred):
+    return (real-pred)**2
+
 def comp_estimate_motor(syst,action):
     syst.estimate_motor_angle()
 
@@ -205,7 +223,8 @@ def LSTM_prep_input(input_data):
 
 def dense_prep_input(input_data):
     X_input=input_data
-    X_input=X_input.reshape((1,len(X_input)))
+    X_input=np.matrix.transpose(np.array(X_input))
+    X_input=np.reshape(X_input[-1],(1,len(X_input[0]))).astype(np.float64 )
     return X_input
 
 def useless_function(*args):

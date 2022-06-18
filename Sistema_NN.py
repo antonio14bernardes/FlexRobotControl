@@ -32,13 +32,17 @@ class System:
         self.tip_angle = [0]
         self.times = [0]
         self.controller_output = [0]
+        self.motor_analyser.get_velocity(self.motor_angle,self.times)
+        self.motor_velocity=self.motor_analyser.velocity
+        self.tip_analyser.get_velocity(self.tip_angle,self.times)
+        self.tip_velocity=self.tip_analyser.velocity
         #AUX
         self.time_interval=[0.001]
         self.numit=0
         self.ints=[]
 
 
-        self.tryer=cont.tryer()
+        #self.tryer=cont.tryer()
 
     def setup_compensator(self, syst_obj, optimized_params=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]):
         self.compensator.setup(syst_obj, optimized_params)
@@ -47,7 +51,7 @@ class System:
         # new_ref=float(input('Input Initial Target: '))
         new_ref = 1
         self.ref = [new_ref]
-        self.start_time = time.process_time()
+        self.start_time = time.time()
         #self.compensator.update()
 
     ### Control Loop Begins Here ###
@@ -101,44 +105,43 @@ class System:
 
         refs=np.ones((1,1))
         syst_test=test_syst
-        syst_test.start()
         ref=refs[0]
         if const_time_int:
             update_times_fnc=syst_test.update_times_constant_interval
         else:
             update_times_fnc=syst_test.update_times
-        #for step, x_point_train in enumerate(Xtrain):
+        syst_test.start()
+        dif=0
+        data_to_prepare=data
         for i in range(num_samples):
-            with tf.GradientTape() as tape:
-                data_to_prepare=data
-                X_input=prep_input_fnc(data_to_prepare)
-                comp = model(X_input)
-                #print(comp)
-                syst_test.update_ref(ref,comp)
-                syst_test.control()
-                #print(syst.controller.action[-1])
-                update_times_fnc()
-                syst_test.estimate_motor_angle()
-                syst_test.estimate_tip_angle()
+            #print(i)
+            X_input=prep_input_fnc(data_to_prepare)
+            comp = model(X_input)
+            syst_test.update_ref(ref,comp)
+            syst_test.control()
+            update_times_fnc()
+            syst_test.estimate_motor_angle()
+            syst_test.estimate_tip_angle()
+            data_to_prepare[0].append(data_to_prepare[0][0])
 
-        current=time.process_time()
-        #print('current',current)
-        #print('dif times',current-syst_test.start_time)
+        current=time.time()
         self.time_interval=np.array([(current-syst_test.start_time)/num_samples])
-        #print(self.time_interval)
     def estimate_motor_angle(self):
-        #print('action from sistema',self.controller.action[-1])
         self.motor_estimator.estimate(times=self.times[-2:], latest_input=self.controller.action[-1])
         self.motor_angle.append(self.motor_estimator.ys[0])
-        #print('from sistNN',self.motor_angle)
+        self.motor_analyser.get_velocity(self.motor_angle,self.times)
+
+
 
     def estimate_motor_angle_NN_cont(self,action):
         self.motor_estimator.estimate(times=self.times[-2:], latest_input=action)
         self.motor_angle.append(self.motor_estimator.ys[0])
+        self.motor_analyser.get_velocity(self.motor_angle,self.times)
 
     def estimate_tip_angle(self):
         self.tip_estimator.estimate(times=self.times[-2:], latest_input=self.motor_angle[-1])
         self.tip_angle.append(self.tip_estimator.ys[0])
+        self.tip_analyser.get_velocity(self.tip_angle,self.times)
 
     def update_ref(self,ref,comp):
         '''

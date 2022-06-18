@@ -49,6 +49,12 @@ coefs_beam_equation=[1,0,1/wn_sq] #[C1,C2,C3,...,Cn] Cn*x^n+Cn-1*x^n-1+...+C1*x=
 coefs_servo_equation=[0,1,T] #[C1,C2,C3,...,Cn] Cn*x^n+Cn-1*x^n-1+...+C1*x=input
 coefs_try=[1,T]
 
+#State space
+A=np.array([[0,0,1,0],[0,0,0,1],[-wn_sq,wn_sq,0,0],[0,0,0,-1/T]])
+B=np.array([[0],[0],[0],[1/T]])
+C=np.array([1,0,0,0])
+D=np.array([0])
+
 #Pins
 pc1=37
 pc1_=35
