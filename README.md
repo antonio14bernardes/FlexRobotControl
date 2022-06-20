@@ -9,7 +9,7 @@ The title for the neural network training file is also quite self-explanatory. S
 
 More recently, I have also created a modified Particle Swarm Optimization algorithm which has produced better results than those of the genetic algorithm.
 
-Up to this point, the controllers that produced the best results were the Linear Quadratic Regulator controller and a novel Transfer Function Traing controller.
+Up to this point, the controllers that produced the best results were the Linear Quadratic Regulator controller and a novel Transfer Function Tracing controller.
 
 Thanks for checking out my code. If you have any comments, please do not hesitate to contact me at antonio14bernardes@outlook.com.
 If this code is of any use to you feel free to use it! I would be glad to serve the science/engineering community! (If you have the time let me know what the application of the code was, just out of curiosity)
