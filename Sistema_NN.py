@@ -3,7 +3,7 @@ import Cont_NN as cont
 import time
 import Parameters as params
 import tensorflow as tf
-
+from NeuralNetworkTraining import get_data
 # import RPi.GPIO as GPIO
 
 class System:
@@ -47,9 +47,9 @@ class System:
     def setup_compensator(self, syst_obj, optimized_params=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]):
         self.compensator.setup(syst_obj, optimized_params)
 
-    def start(self):
+    def start(self,new_ref=1):
         # new_ref=float(input('Input Initial Target: '))
-        new_ref = 1
+
         self.ref = [new_ref]
         self.start_time = time.time()
         #self.compensator.update()
@@ -101,8 +101,9 @@ class System:
         current=time.time()
         self.time_interval=np.array([(current-syst_test.start_time)/num_samples])
 
-    def get_initial_time_gap_NN_comp(self,model,test_syst,data,prep_input_fnc,const_time_int,num_samples=50):
-
+    def get_initial_time_gap_NN_comp(self,model,test_syst,data,prep_input_fnc,const_time_int,num_samples=50,aldrabate=False):
+        if aldrabate:
+            self.time_interval=np.array([0.0001])
         refs=np.ones((1,1))
         syst_test=test_syst
         ref=refs[0]
@@ -111,10 +112,12 @@ class System:
         else:
             update_times_fnc=syst_test.update_times
         syst_test.start()
-        dif=0
+        #print(dir(syst_test))
+        data=get_data(syst_test,data)
         data_to_prepare=data
         for i in range(num_samples):
             #print(i)
+            #print('data to prepare',data_to_prepare)
             X_input=prep_input_fnc(data_to_prepare)
             comp = model(X_input)
             syst_test.update_ref(ref,comp)
@@ -122,7 +125,7 @@ class System:
             update_times_fnc()
             syst_test.estimate_motor_angle()
             syst_test.estimate_tip_angle()
-            data_to_prepare[0].append(data_to_prepare[0][0])
+            #data_to_prepare[0].append(data_to_prepare[0][0])
 
         current=time.time()
         self.time_interval=np.array([(current-syst_test.start_time)/num_samples])
@@ -156,6 +159,9 @@ class System:
         '''
         #new_ref = self.ref[-1]
         self.comp_ref=ref-comp
+        #print('ref',ref)
+        #print('called')
+        self.ref.append(ref)
 
     def get_analysis(self, ss_value=1):
         self.motor_analyser.analyse(self.motor_angle, self.times, ss_value)
