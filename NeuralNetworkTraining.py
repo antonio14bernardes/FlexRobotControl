@@ -29,7 +29,7 @@ def main():
     refs=[1]
 
     trainer=NN_Coach(model,optimizer,loss_fn,loss_metric,syst,controller)
-    trainer.train(refs_input=refs,train_mode='cont',update_weights_each_point=False,loss_thresh=0.01,epochs=1000000,break_combo='ctrl+2')
+    trainer.train(refs_input=refs,train_mode='cont',update_weights_each_point=True,loss_thresh=0.01,epochs=1000000,break_combo='ctrl+2')
 
 class NN_Compensator(keras.Model):
     def __init__(self):
@@ -176,12 +176,18 @@ def run(train,syst_class,controller,model,optimizer,loss_fn,epochs,refs_input,pr
                         general_name=''
                         for l in model.layer_list:
                             general_name+=l.name[0]+str(l.trainable_weights[-1].shape[0])
-                        name=general_name+'-'+str(total_loss[0,0])
+                        if len(np.shape(total_loss))==0:
+                            name=general_name+'-'+str(total_loss)
+                        elif len(np.shape(total_loss))==2:
+                            name=general_name+'-'+str(total_loss[0,0])
                         first_save=False
                         best_weights=copy.deepcopy(model.get_weights())
 
                     else:
-                        name=general_name+'-'+str(total_loss.numpy()[0,0])
+                        if len(np.shape(total_loss))==0:
+                            name=general_name+'-'+str(total_loss)
+                        elif len(np.shape(total_loss))==2:
+                            name=general_name+'-'+str(total_loss[0,0])
                         best_weights=copy.deepcopy(model.get_weights())
 
                 if total_loss<loss_thresh:
@@ -273,15 +279,13 @@ def train_and_loss_metric(loss,model,tape,optimizer,loss_metric):
 def LSTM_prep_input(input_data):
 
     input_array=[]
-    #for list in input_data:
-        #input_array.append(list)
-    #print('input data',input_data)
-    input_array=np.matrix.transpose(np.array(input_data))
-    #print('transposed',input_array)
-    if len(input_array) > 1000:
-        input_array = input_array[-1000:]
 
-    X_input=np.reshape(input_array,(1,len(input_array),len(input_array[0]))).astype(np.float64)
+    input_data=np.array(input_data)
+    input_data_transposed=np.matrix.transpose(input_data)
+    if len(input_data_transposed) > 1000:
+        input_data_transposed = input_data_transposed[-1000:]
+
+    X_input=np.reshape(input_array,(1,len(input_data_transposed),len(input_data_transposed[0]))).astype(np.float64)
     return X_input
 
 def dense_prep_input(input_data):
