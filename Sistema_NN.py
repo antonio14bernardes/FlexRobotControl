@@ -102,8 +102,7 @@ class System:
         self.time_interval=np.array([(current-syst_test.start_time)/num_samples])
 
     def get_initial_time_gap_NN_comp(self,model,test_syst,data,prep_input_fnc,const_time_int,num_samples=50,aldrabate=False):
-        if aldrabate:
-            self.time_interval=np.array([0.0001])
+
         refs=np.ones((1,1))
         syst_test=test_syst
         ref=refs[0]
@@ -129,6 +128,9 @@ class System:
 
         current=time.time()
         self.time_interval=np.array([(current-syst_test.start_time)/num_samples])
+
+        if aldrabate:
+            self.time_interval=np.array([0.01])
     def estimate_motor_angle(self):
         self.motor_estimator.estimate(times=self.times[-2:], latest_input=self.controller.action[-1])
         self.motor_angle.append(self.motor_estimator.ys[0])

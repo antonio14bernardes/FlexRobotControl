@@ -277,15 +277,12 @@ def train_and_loss_metric(loss,model,tape,optimizer,loss_metric):
     #loss_metric(loss)
 
 def LSTM_prep_input(input_data):
-
-    input_array=[]
-
-    input_data=np.array(input_data)
+    input_data=np.array(input_data,dtype=object)
     input_data_transposed=np.matrix.transpose(input_data)
     if len(input_data_transposed) > 1000:
         input_data_transposed = input_data_transposed[-1000:]
 
-    X_input=np.reshape(input_array,(1,len(input_data_transposed),len(input_data_transposed[0]))).astype(np.float64)
+    X_input=np.reshape(input_data_transposed,(1,len(input_data_transposed),len(input_data_transposed[0]))).astype(np.float64)
     return X_input
 
 def dense_prep_input(input_data):
