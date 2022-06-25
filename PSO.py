@@ -22,21 +22,29 @@ def main():
     c2_update=linear_update
 
     #Limits
-    pos_upper_limit=[400,300,2,2,2]#[0.9,200,30]
-    pos_lower_limit=[300,200,0,0,0.0001]#[0,100,0]
-    vel_upper_limit=[3,3,0.4,0.4,0.4]#[0.05,2,1]
-    vel_lower_limit=[-3,-3,-0.4,-0.4,-0.4]#[-0.05,-2,-1]
-
+    pos_upper_limit=[400,300,2,2,2]#[0.45,65,1.01]
+    pos_lower_limit=[300,200,0,0,0.0001]#[0.40,60,1]               #NOTE: BEST POSITION FOR TRACE TF: Best Position [ 0.42202695 60.3151681   1.00759717]
+    vel_upper_limit=[3,3,0.4,0.4,0.4]#[0.005,0.5,0.001]            #NOTE: BEST POSITION FOR TRACE TF: Best Position [3.71917414e+02 2.34247799e+02 6.33011862e-01 3.55617195e-02  1.00000000e-04]
+    vel_lower_limit=[-3,-3,-0.4,-0.4,-0.4]#[-0.005,-0.5,-0.001]
+    #NOTE: BEST POSITION FOR TRACE TF Best Position [ 0.43768431 62.32033077  1.00512856]
     #Fitness
     fitness_fnc=fitness
+    avg_error_penalty=1#Best for trace 10
+    overshoot_penalty=1000#Best for trace 10000
+    settling_time_penalty=1#Best for trace 1
+    avg_torque_penalty=0#Best for trace 0.00005
+    max_torque_penalty=0#Best for trace 0.0005
+    fitness_penalties=[avg_error_penalty,overshoot_penalty,settling_time_penalty,avg_torque_penalty,max_torque_penalty]
 
     #System
     system_fnc=system_LQR
+
     #Initial Velocity
     initially_static=True
 
     best_particle=optimize(num_particles,num_its,w,c1,c2,pos_upper_limit,pos_lower_limit,vel_upper_limit,
-                           vel_lower_limit,fitness_fnc,system_fnc,w_update,c1_update,c2_update,initially_static)
+                           vel_lower_limit,fitness_fnc,fitness_penalties,system_fnc,w_update,c1_update,c2_update,
+                           initially_static)
 
     print('Best Position',best_particle.best_position[-1])
 
@@ -44,6 +52,7 @@ def main():
     print('Average Error',syst_out.tip_analyser.avg_error)
     print('Overshoot',syst_out.tip_analyser.overshoot)
     print('Settling Time',syst_out.tip_analyser.settling_time)
+    print('Max Torque', syst_out.motor_analyser.max_torque)
     plt.plot(syst_out.times,syst_out.tip_angle,label='tip')
     plt.plot(syst_out.times,syst_out.motor_angle,label='motor')
     plt.legend()
@@ -53,8 +62,9 @@ def main():
 
 class Particle:
     def __init__(self,num_its,w,c1,c2,pos_upper_limit,pos_lower_limit,vel_upper_limit,vel_lower_limit,fitness_fnc,
-                 system_fnc,w_update_fnc,c1_udpate_fnc,c2_update_fnc,initially_static=False):
+                 fitness_penalties,system_fnc,w_update_fnc,c1_udpate_fnc,c2_update_fnc,initially_static=False):
         self.fitness_fnc=fitness_fnc
+        self.fitness_penalties=fitness_penalties
         self.system_fnc=system_fnc
         self.w_init,self.w_final=w
         self.c1_init,self.c1_final=c1
@@ -75,7 +85,7 @@ class Particle:
         else:
             self.velocity=np.array(
                 [[np.random.uniform(low=low,high=high) for low,high in zip(vel_lower_limit,vel_upper_limit)]])
-        init_fit=fitness_fnc(self.position[0],system_fnc)
+        init_fit=fitness_fnc(self.position[0],fitness_penalties,system_fnc)
         self.fitness=[init_fit]
         self.best_fitness=[init_fit]
         self.best_position=[self.position[0]]
@@ -95,7 +105,7 @@ class Particle:
         self.velocity=np.append(self.velocity,[new_velocity],axis=0)
         self.position=np.append(self.position,[new_position],axis=0)
 
-        new_fit=self.fitness_fnc(self.position[-1],self.system_fnc)
+        new_fit=self.fitness_fnc(self.position[-1],self.fitness_penalties,self.system_fnc)
         self.fitness.append(new_fit)
         if self.fitness[-1]<self.best_fitness[-1]:
             self.best_fitness.append(self.fitness[-1])
@@ -106,9 +116,9 @@ def system_LQR(ks):
     Q=np.diag(ks[:len(ks)-1])
     R=np.array(ks[-1])
     controller = cont.LQR(A=params.A,B=params.B,Q=Q,R=R)
-    syst = sist.System(controller,compensator='sigmoid')
-    syst.setup_compensator(syst,optimized_params=[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0])
-    syst.get_initial_time_gap_LQR(sist.System,num_samples=100)
+    syst = sist.System(controller,compensator='bypass')
+    syst.setup_compensator(optimized_params=[])
+    syst.get_initial_time_gap(syst,num_samples=100)
     syst.start()
     i=0
     while syst.times[-1]<0.5:
@@ -128,8 +138,8 @@ def system_trace_tf(ks):
     coefs=[ks[2],2*ks[0]/ks[1],1/ks[1]**2]#[ks[2],2*ks[0]/ks[1],1/ks[1]**2]
     controller = cont.PID([236.71653478, 24.59454428, 7.24508008])
     syst = sist.System(controller,compensator='trace tf')
-    syst.setup_compensator(syst,optimized_params=coefs)
-    syst.get_initial_time_gap(sist.System,num_samples=100)
+    syst.setup_compensator(optimized_params=coefs)
+    syst.get_initial_time_gap(syst,num_samples=100)
     syst.start()
     i=0
     while syst.times[-1]<0.5:
@@ -145,16 +155,18 @@ def system_trace_tf(ks):
     return syst
 
 
-def fitness(pos,syst_fnc):
+def fitness(pos,penalties,syst_fnc):
     syst=syst_fnc(pos)
-    #Calculate score
-    avg_error_penalty=1
-    overshoot_penalty=1000
-    settling_time_penalty=1
 
-    score=np.dot([avg_error_penalty,overshoot_penalty,settling_time_penalty],
-                 [syst.tip_analyser.avg_error,syst.tip_analyser.overshoot,syst.tip_analyser.settling_time])
+    avg_error_penalty,overshoot_penalty,settling_time_penalty,avg_torque_penalty,max_torque_penalty=penalties
 
+    score=np.dot([avg_error_penalty,overshoot_penalty,settling_time_penalty,avg_torque_penalty,max_torque_penalty],
+        [syst.tip_analyser.avg_error,syst.tip_analyser.overshoot,syst.tip_analyser.settling_time,
+         syst.motor_analyser.avg_torque,syst.motor_analyser.max_torque])
+
+    #print(np.multiply([avg_error_penalty,overshoot_penalty,settling_time_penalty,avg_torque_penalty,max_torque_penalty],
+    #                  [syst.tip_analyser.avg_error,syst.tip_analyser.overshoot,syst.tip_analyser.settling_time,
+    #                   syst.motor_analyser.avg_torque,syst.motor_analyser.max_torque])*100/score)
     return score
 
 
@@ -168,14 +180,14 @@ def clip(arr,max,min):
     return np.clip(arr,min,max)
 
 def optimize(num_particles,num_its,w,c1,c2,pos_upper_limit,pos_lower_limit,vel_upper_limit,vel_lower_limit,fitness_fnc,
-             system_fnc,w_update_fnc,c1_udpate_fnc,c2_update_fnc,initially_static=False):
+             fitness_penalties,system_fnc,w_update_fnc,c1_udpate_fnc,c2_update_fnc,initially_static=False):
     key_press=False
     particles=[]
     print('Initializing Particles')
     for i in range(num_particles):
         print('Creating particle',i,'out of',num_particles)
         particles.append(Particle(num_its,w,c1,c2,pos_upper_limit,pos_lower_limit,vel_upper_limit,vel_lower_limit,
-                                  fitness_fnc,system_fnc,w_update_fnc,c1_udpate_fnc,c2_update_fnc,initially_static))
+                                  fitness_fnc,fitness_penalties,system_fnc,w_update_fnc,c1_udpate_fnc,c2_update_fnc,initially_static))
     best_global_fitness=[particles[0].best_fitness[-1]]
     best_global_position=[particles[0].best_position[-1]]
     best_particle=particles[0]

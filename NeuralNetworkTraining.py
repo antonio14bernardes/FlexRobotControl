@@ -11,25 +11,27 @@ import copy
 
 def main():
     model=NN_Compensator()
-    model.add_LSTM(20)
-    model.add_dense(30,'tanh')
-    model.add_dense(30,'tanh')
-    model.add_dense(30,'tanh')
-    model.add_dense(30,'tanh')
+    model.add_LSTM(15)
+    model.add_dense(25,'tanh')
+    model.add_dense(25,'tanh')
+    model.add_dense(15,'tanh')
     model.add_dense(1,'linear')
     optimizer = tf.keras.optimizers.Adam(learning_rate=1e-3)#,beta_1=0.98,beta_2=0.88)
-    #optimizer = tf.keras.optimizers.RMSprop(learning_rate=1e-3,rho=0.9,momentum=0.0)
-    #loss_fn = tf.keras.losses.MeanSquaredError()
-    loss_fn=custom_loss_literalythesqrloss_scalar
+    loss_fn=custom_loss_penalize_overshoot
     loss_metric = tf.keras.metrics.Mean()
 
     syst=sist.System
-    controller=cont.PID
+    controller=cont.PID #If training mode is 'cont', this controller will be bypassed
 
+    data=['refs','motor angle','tip angle','motor velocity','tip velocity','times']
+    data_to_show=['tip angle','motor_angle']
     refs=[1]
 
     trainer=NN_Coach(model,optimizer,loss_fn,loss_metric,syst,controller)
-    trainer.train(refs_input=refs,train_mode='cont',update_weights_each_point=True,loss_thresh=0.01,epochs=1000000,break_combo='ctrl+2')
+
+    trainer.train(refs_input=refs, epochs=10000, train_mode='cont',loss_thresh=0.001, update_weights_each_point=False,
+        aldrabated_time_interval=0.02,time_loop_pass=1,save_thresh=5, break_combo='ctrl+2',
+        data_string=data,data_to_plot=data_to_show)
 
 class NN_Compensator(keras.Model):
     def __init__(self):
@@ -65,24 +67,25 @@ class NN_Coach:
         self.syst=syst
         self.controller=controller
         self.const_t_int=const_t_int
-        self.model_name_general='none'
+        #self.model_name_general='none'
 
     def train(self, refs_input, epochs, train_mode,
               data_string=['refs','motor angle','tip angle','motor velocity','tip velocity'],
               data_to_plot=['tip angle','motor_angle'],loss_thresh=0.0, update_weights_each_point=False,
-              time_loop_pass=1,save_thresh=30, break_combo='ctrl+2'):
+              time_loop_pass=2,save_thresh=30, break_combo='ctrl+2',aldrabated_time_interval=False):
 
         run(train=True,syst_class=self.syst,controller=self.controller,model=self.model,optimizer=self.optimizer,
             loss_fn=self.loss_fn,epochs=epochs,refs_input=refs_input,prepare_input=self.prepare_input,
             time_loop_pass=time_loop_pass,mode=train_mode,update_weights_each_point=update_weights_each_point,
             const_t_int=self.const_t_int,save_thresh=save_thresh,loss_thresh=loss_thresh,break_combo=break_combo,
-            name=None,best_weights=None,data_string=data_string,data_to_plot=data_to_plot)
+            name=None,best_weights=None,data_string=data_string,data_to_plot=data_to_plot,
+            aldrabated_time_interval=aldrabated_time_interval)
 
 
 def run(train,syst_class,controller,model,optimizer,loss_fn,epochs,refs_input,prepare_input,time_loop_pass,mode,
         update_weights_each_point,const_t_int,save_thresh,loss_thresh,break_combo,name=None,best_weights=None,
-        data_string=['refs','motor angle','tip angle','motor velocity','tip velocity'],
-        data_to_plot=['tip angle','motor_angle']):
+        data_string=['refs','motor angle','tip angle','motor velocity','tip velocity','times'],
+        data_to_plot=['tip angle','motor_angle'],aldrabated_time_interval=False):
     # Iterate over epochs.
     key_press = False
     good_enough=False
@@ -117,9 +120,13 @@ def run(train,syst_class,controller,model,optimizer,loss_fn,epochs,refs_input,pr
         get_control_action=cont_control_action
         get_motor_estimate=cont_estimate_motor
 
-    first_save=True
-    best_total_loss=save_thresh
+
     try:
+        if train:
+            name='StopedFirstEpoch'
+        first_save=True
+        best_total_loss=save_thresh
+
         for epoch in range(epochs):
             if train:
                 print("Start of epoch %d" % (epoch,))
@@ -141,7 +148,7 @@ def run(train,syst_class,controller,model,optimizer,loss_fn,epochs,refs_input,pr
 
             get_interval(model=model, test_syst=syst_test, data=data_string,
                               prep_input_fnc=prepare_input, const_time_int=const_t_int,
-                              num_samples=100,aldrabate=True)
+                              num_samples=100,aldrabate=aldrabated_time_interval)
 
             syst.start(new_ref=refs[-1])
             data=get_data(syst,data_string)
@@ -166,29 +173,36 @@ def run(train,syst_class,controller,model,optimizer,loss_fn,epochs,refs_input,pr
                     update_weights_in_loop(grads,model,optimizer)
 
             update_weights_out_loop(grads,model,optimizer)
-
+            #print('best',best_total_loss,'current',total_loss,'dif',best_total_loss>total_loss,train)
             if train:
-                name='StopedFirstEpoch'
                 if total_loss<best_total_loss:
                     best_total_loss=total_loss
+                    #print('New Checkpoint')
                     if first_save:
                         #path=os.getcwd()
-                        general_name=''
+                        general_name=mode
                         for l in model.layer_list:
-                            general_name+=l.name[0]+str(l.trainable_weights[-1].shape[0])
+                            #print(l.trainable_weights)
+                            if isinstance(l,keras.layers.LSTM):
+                                general_name+=l.name[0]+str(l.trainable_weights[1].shape[0])
+                            elif isinstance(l,keras.layers.Dense):
+                                general_name+=l.name[0]+str(l.trainable_weights[-1].shape[0])
                         if len(np.shape(total_loss))==0:
-                            name=general_name+'-'+str(total_loss)
+                            name=general_name+'-'+str(total_loss.numpy())
                         elif len(np.shape(total_loss))==2:
-                            name=general_name+'-'+str(total_loss[0,0])
+                            name=general_name+'-'+str(total_loss.numpy()[0,0])
                         first_save=False
                         best_weights=copy.deepcopy(model.get_weights())
 
                     else:
                         if len(np.shape(total_loss))==0:
-                            name=general_name+'-'+str(total_loss)
+                            name=general_name+'-'+str(total_loss.numpy())
                         elif len(np.shape(total_loss))==2:
-                            name=general_name+'-'+str(total_loss[0,0])
+                            name=general_name+'-'+str(total_loss.numpy()[0,0])
                         best_weights=copy.deepcopy(model.get_weights())
+                    #for arr1,arr2 in zip(best_weights,model.get_weights()):
+                    #    print(np.array_equal(arr1,arr2))
+                    print('New Checkpoint',name)
 
                 if total_loss<loss_thresh:
                     good_enough=True
@@ -202,12 +216,13 @@ def run(train,syst_class,controller,model,optimizer,loss_fn,epochs,refs_input,pr
                 print("epoch %d: mean loss = %.4f" % (epoch, total_loss)) #self.loss_metric.result()
 
             else:
+                print('got here', name)
                 get_plot(syst,data=data_to_plot,title=name)
                 save=input('Save model? y/n')
                 if save=='y':
                     save_object(best_weights,name)
 
-        if train and (good_enough or key_press):
+        if train:
 
             if good_enough:
                 print('Good enough')
@@ -222,7 +237,8 @@ def run(train,syst_class,controller,model,optimizer,loss_fn,epochs,refs_input,pr
             print('Loss',total_loss)
     except KeyboardInterrupt:
         if train:
-            print('Here')
+            #print(name)
+
             run(train=False,syst_class=syst_class,controller=controller,model=model,optimizer=optimizer,
                 loss_fn=loss_fn,epochs=epochs,refs_input=refs_input,prepare_input=prepare_input,
                 time_loop_pass=time_loop_pass,mode=mode,update_weights_each_point=update_weights_each_point,
@@ -230,7 +246,11 @@ def run(train,syst_class,controller,model,optimizer,loss_fn,epochs,refs_input,pr
                 name=name,best_weights=best_weights,data_string=data_string,data_to_plot=data_to_plot)
 
 
-
+def custom_loss_penalize_overshoot(real,pred):
+    if real-pred<0:
+        return 100*(pred-real)**2
+    else:
+        return (real-pred)**2
 
 def custom_loss_literalytheabsvalue(real,pred):
     if real-pred<0:
@@ -318,7 +338,8 @@ def get_data(syst,data):
             return_data.append(syst.tip_velocity)
         elif value=='reference' or value=='ref' or value=='refs':
             return_data.append(syst.ref)
-
+        elif value=='times' or value=='time':
+            return_data.append(syst.times)
     return return_data
 
 def prepare_ref_random_order(refs_input,epochs):

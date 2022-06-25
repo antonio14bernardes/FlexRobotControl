@@ -74,6 +74,8 @@ class Analysis:
         self.velocity=self.calc_1.derivative*60/(2*math.pi)  #rpm
         self.acceleration=self.calc_2.derivative  #r/s²
         self.torque=self.acceleration*math.pi*params.J  #N/m
+        self.max_torque=np.max(np.abs(self.torque))
+        self.avg_torque=np.average(np.abs(self.torque))
 
 class PID(Calculus,Analysis):
     def __init__(self,K = [9.778846736, 1.40789948,  0.177706101]): #[97.78846736, 13.40789948,  1.77706101]  [283.41320667,   9.70358294,   1.92906719]
@@ -113,7 +115,8 @@ class I_PD(Calculus,Analysis):
         self.action = np.append(self.action, action)
 
 class LQR:
-    def __init__(self,A=params.A,B=params.B,Q=np.diag([300,200,1.5,0]),R=np.array([1])):
+    def __init__(self,A=params.A,B=params.B,Q=np.diag([3.71917414e+02,2.34247799e+02,6.33011862e-01,3.55617195e-02]),
+                 R=np.array([1.00000000e-04])):
         self.calc_tip=Calculus()
         self.calc_motor=Calculus()
 
@@ -288,6 +291,7 @@ class Compensator(Calculus):
     def __init__(self, function='trace tf'):
         self.comp_ref=np.array([])
         self.times_ref_change=np.array([])
+        self.name=function
         if function == 'cosine':
             self.comp_function=cosine_comp
             self.comp_update=cosine_comp_update

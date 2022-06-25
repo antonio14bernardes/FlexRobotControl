@@ -44,8 +44,8 @@ class System:
 
         #self.tryer=cont.tryer()
 
-    def setup_compensator(self, syst_obj, optimized_params=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]):
-        self.compensator.setup(syst_obj, optimized_params)
+    def setup_compensator(self, optimized_params=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]):
+        self.compensator.setup(self, optimized_params)
 
     def start(self,new_ref=1):
         # new_ref=float(input('Input Initial Target: '))
@@ -102,7 +102,6 @@ class System:
         self.time_interval=np.array([(current-syst_test.start_time)/num_samples])
 
     def get_initial_time_gap_NN_comp(self,model,test_syst,data,prep_input_fnc,const_time_int,num_samples=50,aldrabate=False):
-
         refs=np.ones((1,1))
         syst_test=test_syst
         ref=refs[0]
@@ -129,8 +128,10 @@ class System:
         current=time.time()
         self.time_interval=np.array([(current-syst_test.start_time)/num_samples])
 
-        if aldrabate:
-            self.time_interval=np.array([0.01])
+        if aldrabate is not False:
+            self.time_interval=np.array([aldrabate])
+
+
     def estimate_motor_angle(self):
         self.motor_estimator.estimate(times=self.times[-2:], latest_input=self.controller.action[-1])
         self.motor_angle.append(self.motor_estimator.ys[0])
