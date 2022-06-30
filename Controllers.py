@@ -43,11 +43,16 @@ class Analysis:
         self.calc_1=Calculus()
         self.calc_2=Calculus()
 
-        self.real_time_calc=Calculus()
+        self.real_time_vel=Calculus()
+        self.real_time_acc=Calculus()
 
     def get_velocity(self,y,t):
-        self.real_time_calc.get_real_derivative(y,t)
-        self.velocity=self.real_time_calc.derivative
+        self.real_time_vel.get_real_derivative(y,t)
+        self.velocity=self.real_time_vel.derivative
+
+    def get_acceleration(self,vel,t):
+        self.real_time_acc.get_real_derivative(vel,t)
+        self.acceleration=self.real_time_acc.derivative
         
     def analyse(self,y,t,ss_value=1):
         overshoot = (np.max(y)-ss_value)/ss_value if (np.max(y)-ss_value)/ss_value>0 else 0
@@ -115,22 +120,28 @@ class I_PD(Calculus,Analysis):
         self.action = np.append(self.action, action)
 
 class LQR:
-    def __init__(self,A=params.A,B=params.B,Q=np.diag([3.71917414e+02,2.34247799e+02,6.33011862e-01,3.55617195e-02]),
+    def __init__(self,syst=None ,A=None,B=None,Q=np.diag([3.71917414e+02,2.34247799e+02,6.33011862e-01,3.55617195e-02]),
                  R=np.array([1.00000000e-04])):
         self.calc_tip=Calculus()
         self.calc_motor=Calculus()
-
-        self.A=A
-        self.B=B
         self.Q=Q
         self.R=R
+        if syst is None and A is not None and B is not None:
+            self.A=A
+            self.B=B
+            self.K,S,E=c.lqr(self.A,self.B,self.Q,self.R)
 
-        self.K,S,E=c.lqr(self.A,self.B,self.Q,self.R)
+
+        self.syst=syst
 
         self.action=np.array([0])
 
-    def get_action(self,ref,tip,motor,times):
+    def link_to_system(self,syst):
+        self.syst=syst
 
+    def get_action(self,ref,tip,motor,times):
+        if not (self.syst is None):
+            self.K,S,E=c.lqr(self.syst.A,self.syst.B,self.syst.Q,self.syst.R)
         self.calc_tip.get_real_derivative(tip,times)
         self.calc_motor.get_real_derivative(motor,times)
         ref=np.array([ref[-1],ref[-1],0,0])
@@ -141,7 +152,7 @@ class LQR:
         self.action=np.append(self.action,new_action)
 
 
-class Estimator:
+class Estimator_old:
     def __init__(self, function, initial_values=[], initial_input=0, method='Modified Euler'):
 
         if function=='tip':
@@ -286,6 +297,56 @@ def aldrabated(times, y, inputs, coefs):
     new_ys.append(new_d2y)
     return new_ys
 
+class Estimator:
+    def __init__(self, function,syst=None, initial_values=[], initial_input=0, method='Modified Euler'):
+        if not (syst is None):
+            if function=='tip':
+                self.coefs=syst.coefs_beam_equation
+            elif function=='servo':
+                self.coefs = syst.coefs_servo_equation
+            else:
+                self.coefs=function
+        else:
+            self.coefs=function
+
+        self.ys = []
+        if len(initial_values)==0:
+            for i in range(len(self.coefs[0])-1):
+                self.ys.append(0)
+        else:
+            if len(self.coefs[0])-1==len(initial_values):
+                for value in initial_values:
+                    self.ys.append(value)
+            else:
+                raise Exception('initial value dimension is equal to ys list dimension')
+
+        new_highest_order = initial_input
+        for i in range(len(self.coefs[0]) - 1):
+            new_highest_order -= self.ys[i] * self.coefs[0][i]
+        new_highest_order /= self.coefs[0][-1]
+        self.ys.append(new_highest_order)
+
+        if method=='Euler':
+            self.estimator=euler_update
+
+        elif method=='Modified Euler':
+            self.estimator=modified_euler_update
+
+        elif method=='Aldrabated':
+            self.estimator = aldrabated
+
+        self.stored_ys=[self.ys]
+
+    def estimate(self,times,latest_inputs=[1]):   #coefs=[[coefs of output variables],[coefs of input variable 1],[coefs of input variable 2],...]
+                                                    #latest_inputs=[latest_input1,latest input 2,...]
+        output_coefs=self.coefs[0]
+        input_coefs=self.coefs[1:]
+        send_input=0
+        for coef_list,input_list in zip(input_coefs,latest_inputs):
+            send_input+=np.dot(coef_list,input_list)
+
+        self.ys=self.estimator(times,self.ys,send_input,output_coefs)
+        self.stored_ys.append(self.ys)
 
 class Compensator(Calculus):
     def __init__(self, function='trace tf'):
