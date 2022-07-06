@@ -15,7 +15,7 @@ class Calculus:
         if len(y)==1:
             self.derivative=np.append(self.derivative,0)
         elif t[-1]-t[-2]==0:
-            self.derivative=np.append(self.derivative,0)#self.derivative[-1])
+            self.derivative=np.append(self.derivative,0)
         else:
             self.derivative=np.append(self.derivative,(y[-1]-y[-2])/(t[-1]-t[-2]))
 
@@ -23,7 +23,7 @@ class Calculus:
         if len(y)==1:
             self.integral = np.append(self.integral, 0)
         else:
-            self.integral=np.append(self.integral,self.integral[-1]+y[-1]*(t[-1]-t[-2]))#simpson(y,t))
+            self.integral=np.append(self.integral,self.integral[-1]+y[-1]*(t[-1]-t[-2]))
 
     def get_derivative(self,y):
         if len(y)==1:
@@ -39,12 +39,18 @@ class Calculus:
 
 
 class Analysis:
-    def __init__(self):
+    def __init__(self,syst=None,motor=False):
         self.calc_1=Calculus()
         self.calc_2=Calculus()
 
         self.real_time_vel=Calculus()
         self.real_time_acc=Calculus()
+
+        self.syst=syst
+        self.motor=motor
+
+        if self.syst is not None and motor:
+            self.torque=np.array([])
 
     def get_velocity(self,y,t):
         self.real_time_vel.get_real_derivative(y,t)
@@ -53,37 +59,43 @@ class Analysis:
     def get_acceleration(self,vel,t):
         self.real_time_acc.get_real_derivative(vel,t)
         self.acceleration=self.real_time_acc.derivative
+
+        if self.syst is not None and self.motor:
+            if len(self.acceleration)>1:
+                self.torque=np.append(self.torque,self.acceleration[-1]*self.syst.J_axis)
+            else:
+                self.torque=np.append(self.torque,0)
         
     def analyse(self,y,t,ss_value=1):
         overshoot = (np.max(y)-ss_value)/ss_value if (np.max(y)-ss_value)/ss_value>0 else 0
-        max_y = np.max(y)
-        #index_max_y=np.argwhere(y==max_y)[0][0]
-        #min_after_step = np.min(y[index_max_y:])
         check=True
         index = -1
         while check:
-            if y[index] >= 1.02 * ss_value or y[index] <= 0.98 * ss_value:
-                settling_time = t[index]
-                check = False
+            if ss_value>0:
+                if y[index] >= 1.02 * ss_value or y[index] <= 0.98 * ss_value:
+                    settling_time = t[index]
+                    check = False
+            else:
+                if y[index] <= 1.02 * ss_value or y[index] >= 0.98 * ss_value:
+                    settling_time = t[index]
+                    check = False
             index-=1
         self.overshoot=overshoot
         self.settling_time=settling_time
         self.summed_error=np.sum(np.abs(y-ss_value))
         self.avg_error=self.summed_error/len(y)
         self.ss_value=ss_value
-        
-        for i in range(len(y)):
-            self.calc_1.get_real_derivative(y[:i+1],t[:i+1])
-            self.calc_2.get_real_derivative(self.calc_1.derivative[:i+1],t[:i+1])
-            
-        self.velocity=self.calc_1.derivative*60/(2*math.pi)  #rpm
-        self.acceleration=self.calc_2.derivative  #r/s²
-        self.torque=self.acceleration*math.pi*params.J  #N/m
-        self.max_torque=np.max(np.abs(self.torque))
-        self.avg_torque=np.average(np.abs(self.torque))
+
+        self.analysis={'Overshoot':self.overshoot,'Settling time':self.settling_time,'Average error':self.avg_error}
+
+        if self.syst is not None and self.motor:
+            self.max_torque=np.max(np.abs(self.torque))
+            self.avg_torque=np.average(np.abs(self.torque))
+            self.analysis['Max Torque']=self.max_torque
+
 
 class PID(Calculus,Analysis):
-    def __init__(self,K = [9.778846736, 1.40789948,  0.177706101]): #[97.78846736, 13.40789948,  1.77706101]  [283.41320667,   9.70358294,   1.92906719]
+    def __init__(self,K = [236.71653478, 24.59454428, 7.24508008]):
         self.Kp, self.Ki, self.Kd =K
         self.action=np.array([])
         self.error=np.array([])
@@ -91,15 +103,13 @@ class PID(Calculus,Analysis):
         Calculus.__init__(self)
         Analysis.__init__(self)
 
+    def link_system(self,syst):
+        self.syst=syst
+
     def get_action(self,ref,current_value,times):
         self.error=np.append(self.error,ref[-1]-current_value[-1])
         self.get_real_derivative(self.error,times)
         self.get_real_integral(self.error,times)
-        #Temporary#
-        self.integral_action=self.Ki*self.integral
-        self.derivative_action=self.Kd*self.derivative
-        self.proportional_action=self.Kp * self.error
-        #</>#
         action = self.Kp*self.error[-1]+self.Ki*self.integral[-1]+self.Kd*self.derivative[-1]
         self.action=np.append(self.action,action)
 
@@ -136,12 +146,12 @@ class LQR:
 
         self.action=np.array([0])
 
-    def link_to_system(self,syst):
+    def link_system(self,syst):
         self.syst=syst
 
     def get_action(self,ref,tip,motor,times):
         if not (self.syst is None):
-            self.K,S,E=c.lqr(self.syst.A,self.syst.B,self.syst.Q,self.syst.R)
+            self.K,S,E=c.lqr(self.syst.A,self.syst.B,self.Q,self.R)
         self.calc_tip.get_real_derivative(tip,times)
         self.calc_motor.get_real_derivative(motor,times)
         ref=np.array([ref[-1],ref[-1],0,0])
@@ -151,56 +161,15 @@ class LQR:
         new_action=np.dot(self.K[0],inputs)
         self.action=np.append(self.action,new_action)
 
+class Bypass:
+    def __init__(self):
+        self.action=np.array([])
 
-class Estimator_old:
-    def __init__(self, function, initial_values=[], initial_input=0, method='Modified Euler'):
+    def link_system(self,syst):
+        self.syst=syst
 
-        if function=='tip':
-            self.coefs=params.coefs_beam_equation
-        elif function=='servo':
-            self.coefs = params.coefs_servo_equation
-        elif function == 'try':
-            self.coefs = params.coefs_try
-
-        else:
-            self.coefs=function
-
-        self.ys = []
-        if len(initial_values)==0:
-            for i in range(len(self.coefs)-1):
-                self.ys.append(0)
-        else:
-            if len(self.coefs)-1==len(initial_values):
-                for value in initial_values:
-                    self.ys.append(value)
-            else:
-                raise Exception('initial value dimension is equal to ys list dimension')
-
-        new_highest_order = initial_input
-        for i in range(len(self.coefs) - 1):
-            new_highest_order -= self.ys[i] * self.coefs[i]
-        new_highest_order /= self.coefs[-1]
-        self.ys.append(new_highest_order)
-
-        if method=='Euler':
-            self.estimator=euler_update
-
-        elif method=='Modified Euler':
-            self.estimator=modified_euler_update
-
-        elif method=='Aldrabated':
-            self.estimator = aldrabated
-
-        self.stored_ys=[self.ys]
-
-    def estimate(self,times,latest_input):
-        self.ys=self.estimator(times,self.ys,latest_input,self.coefs)
-        self.stored_ys.append(self.ys)
-
-#NOTES FOR FOLLOWING FUNCTIONS
-#y = list of lists containing values of y dy ddy etc. [y,dy,ddy,...]
-#input = list of values of motor angle or control action
-#coefs = list of coefs: [C1,C2,C3,...,Cn] Cn*x^n+Cn-1*x^n-1+...+C1*x=input
+    def get_action(self):
+        self.action=np.append(self.action,self.syst.compensator.comp_ref[-1])
 
 def euler_update(times, prev_y, latest_input, coefs,subit=10):
     step=(times[-1]-times[-2])/subit
@@ -233,21 +202,20 @@ def modified_euler_update(times, prev_y, latest_input, coefs,subit=10):
     pred_new_highest_order = latest_input
     for i in range(len(prev_y) - 1):
         pred_new = prev_y[i] + step * prev_y[i + 1]
-        pred_new_highest_order -= coefs[i] * pred_new
+        pred_new_highest_order = pred_new_highest_order-coefs[i] * pred_new
         pred_new_ys.append(pred_new)
     pred_new_highest_order /= coefs[-1]
     pred_new_ys.append(pred_new_highest_order)
-
+    #first iteration
     new_highest_order=latest_input
     new_ys=[]
     for i in range(1,len(prev_y)):
         avg_deriv=(prev_y[i]+pred_new_ys[i])/2
         new=prev_y[i-1]+step*avg_deriv
-        new_highest_order-=coefs[i-1]*new
+        new_highest_order=new_highest_order-coefs[i-1]*new
         new_ys.append(new)
     new_highest_order /= coefs[-1]
     new_ys.append(new_highest_order)
-
     #remaining iterations
     for i in range(1,subit):
         prev_y = new_ys
@@ -255,7 +223,7 @@ def modified_euler_update(times, prev_y, latest_input, coefs,subit=10):
         pred_new_highest_order = latest_input
         for i in range(len(prev_y)-1):
             pred_new = prev_y[i] + step * prev_y[i + 1]
-            pred_new_highest_order -= coefs[i] * pred_new
+            pred_new_highest_order = pred_new_highest_order-coefs[i] * pred_new
             pred_new_ys.append(pred_new)
         pred_new_highest_order /= coefs[-1]
         pred_new_ys.append(pred_new_highest_order)
@@ -265,11 +233,11 @@ def modified_euler_update(times, prev_y, latest_input, coefs,subit=10):
         for i in range(1,len(prev_y)):
             avg_deriv=(prev_y[i]+pred_new_ys[i])/2
             new=prev_y[i-1]+step*avg_deriv
-            new_highest_order-=coefs[i-1]*new
+            new_highest_order=new_highest_order-coefs[i-1]*new
             new_ys.append(new)
         new_highest_order /= coefs[-1]
         new_ys.append(new_highest_order)
-
+        new_ys=np.reshape(new_ys,(len(new_ys),))
     return new_ys
 
 def aldrabated(times, y, inputs, coefs):
@@ -298,7 +266,9 @@ def aldrabated(times, y, inputs, coefs):
     return new_ys
 
 class Estimator:
-    def __init__(self, function,syst=None, initial_values=[], initial_input=0, method='Modified Euler'):
+    def __init__(self, function,syst=None, initial_values=[], initial_inputs=[], method='Modified Euler'):
+        self.function=function
+        self.syst=syst
         if not (syst is None):
             if function=='tip':
                 self.coefs=syst.coefs_beam_equation
@@ -319,7 +289,24 @@ class Estimator:
                     self.ys.append(value)
             else:
                 raise Exception('initial value dimension is equal to ys list dimension')
+        if len(initial_inputs)==0:
+            for i in range(1,len(self.coefs)):
+                aux=[]
+                for i in range(len(self.coefs[i])):
+                    aux.append(0)
+                initial_inputs.append(aux)
+        else:
 
+            if len(self.coefs)-1==len(initial_inputs):
+                for i in range(1,len(self.coefs)):
+                    if not len(self.coefs[i])==len(initial_inputs[i-1]):
+                        raise Exception('initial inputs dimension is not coherent with coefs')
+            else:
+                raise Exception('initial inputs dimension is not coherent with coefs')
+
+        initial_input=0
+        for i in range(1,len(self.coefs)):
+            initial_input+=np.dot(initial_inputs[i-1],self.coefs[i])
         new_highest_order = initial_input
         for i in range(len(self.coefs[0]) - 1):
             new_highest_order -= self.ys[i] * self.coefs[0][i]
@@ -337,22 +324,30 @@ class Estimator:
 
         self.stored_ys=[self.ys]
 
-    def estimate(self,times,latest_inputs=[1]):   #coefs=[[coefs of output variables],[coefs of input variable 1],[coefs of input variable 2],...]
-                                                    #latest_inputs=[latest_input1,latest input 2,...]
+    def estimate(self,times,latest_inputs=[1]):
+
+        if not (self.syst is None):
+            if self.function=='tip':
+                self.coefs=self.syst.coefs_beam_equation
+            elif self.function=='servo':
+                self.coefs = self.syst.coefs_servo_equation
+            else:
+                self.coefs=self.function
+
         output_coefs=self.coefs[0]
         input_coefs=self.coefs[1:]
         send_input=0
+
         for coef_list,input_list in zip(input_coefs,latest_inputs):
             send_input+=np.dot(coef_list,input_list)
-
         self.ys=self.estimator(times,self.ys,send_input,output_coefs)
         self.stored_ys.append(self.ys)
 
 class Compensator(Calculus):
-    def __init__(self, function='trace tf'):
+    def __init__(self, function='trace tf',optimized_coefs=[1.00759717,2*0.42202695/60.3151681,1/(60.3151681**2)]):
         self.comp_ref=np.array([])
         self.times_ref_change=np.array([])
-        self.name=function
+        self.function=function
         if function == 'cosine':
             self.comp_function=cosine_comp
             self.comp_update=cosine_comp_update
@@ -365,14 +360,20 @@ class Compensator(Calculus):
             self.comp_function=trace_tf_comp
             self.comp_update=trace_tf_comp_update
             self.calc=Calculus
+        elif function == 'trace tf particular':
+            self.comp_function=trace_tf_comp_particular
+            self.comp_update=trace_tf_comp_update
+            self.calc=Calculus
         else:
             self.comp_function=return_zero
             self.comp_update=return_zero
-    
-    def setup(self,syst_obj,optimized_coefs=[]):
-        self.syst_obj=syst_obj
+
         self.optimized_coefs=optimized_coefs
         self.calc=Calculus
+    
+    def link_system(self,syst_obj):
+        self.syst_obj=syst_obj
+
             
     def update(self):
         self.times_ref_change=np.append(self.times_ref_change,self.syst_obj.times[-1])
@@ -431,12 +432,12 @@ def trace_tf_comp(syst_obj,times_ref_change,parameters):
     t,params_tf_trace=parameters
     t.append(syst_obj.times[-1] - times_ref_change[-1])
     init_val=syst_obj.tip_estimator.ys[:len(params_tf_trace)-1]
-    estimator=Estimator(function=params_tf_trace, initial_values=init_val, initial_input=syst_obj.ref[-1],
+    estimator=Estimator(function=[params_tf_trace,[1]], initial_values=init_val, initial_inputs=[[syst_obj.ref[-1]]],
                         method='Modified Euler')
-    estimator.estimate(times=t, latest_input=syst_obj.ref[-1])
+    estimator.estimate(times=t, latest_inputs=[syst_obj.ref[-1]])
     ys_copy=copy.deepcopy(estimator.ys)
-    if len(ys_copy)<len(params.coefs_beam_equation):
-        for i in range(len(params.coefs_beam_equation)-len(ys_copy)):
+    if len(ys_copy)<len(syst_obj.coefs_beam_equation_output):
+        for i in range(len(syst_obj.coefs_beam_equation_output)-len(ys_copy)):
             if len(syst_obj.tip_estimator.stored_ys)>1:
                 ys_copy.append((syst_obj.tip_estimator.stored_ys[-1][len(ys_copy)+i]-
                                 syst_obj.tip_estimator.stored_ys[-1][len(ys_copy)+i])
@@ -444,9 +445,35 @@ def trace_tf_comp(syst_obj,times_ref_change,parameters):
             else:
                 ys_copy.append(0)
 
-    elif len(ys_copy)>len(params.coefs_beam_equation):
-        ys_copy=ys_copy[:len(params.coefs_beam_equation)]
-    ref_to_motor=np.dot(ys_copy,params.coefs_beam_equation)
+    elif len(ys_copy)>len(syst_obj.coefs_beam_equation_output):
+        ys_copy=ys_copy[:len(syst_obj.coefs_beam_equation_output)]
+    total_input=np.dot(ys_copy,syst_obj.coefs_beam_equation_output)
+    ref_to_motor=total_input-np.dot(syst_obj.coefs_beam_equation_inertia_input,[0,0,syst_obj.link_base_acceleration[-1]])
+    return syst_obj.ref[-1]-ref_to_motor
+
+def trace_tf_comp_particular(syst_obj,times_ref_change,parameters):
+    t,params_tf_trace=parameters
+    params_tf_trace=[params_tf_trace[2]*syst_obj.J_axis,2*params_tf_trace[0]/params_tf_trace[1],1/((params_tf_trace[1]*syst_obj.J_axis)**2)]
+    t.append(syst_obj.times[-1] - times_ref_change[-1])
+    init_val=syst_obj.tip_estimator.ys[:len(params_tf_trace)-1]
+    print(syst_obj.ref)
+    estimator=Estimator(function=[params_tf_trace,[1]], initial_values=init_val, initial_inputs=[[syst_obj.ref[-1]]],
+                        method='Modified Euler')
+    estimator.estimate(times=t, latest_inputs=[syst_obj.ref[-1]])
+    ys_copy=copy.deepcopy(estimator.ys)
+    if len(ys_copy)<len(syst_obj.coefs_beam_equation_output):
+        for i in range(len(syst_obj.coefs_beam_equation_output)-len(ys_copy)):
+            if len(syst_obj.tip_estimator.stored_ys)>1:
+                ys_copy.append((syst_obj.tip_estimator.stored_ys[-1][len(ys_copy)+i]-
+                                syst_obj.tip_estimator.stored_ys[-1][len(ys_copy)+i])
+                               /(syst_obj.times[-1]-syst_obj.times[-2]))
+            else:
+                ys_copy.append(0)
+
+    elif len(ys_copy)>len(syst_obj.coefs_beam_equation_output):
+        ys_copy=ys_copy[:len(syst_obj.coefs_beam_equation_output)]
+    total_input=np.dot(ys_copy,syst_obj.coefs_beam_equation_output)
+    ref_to_motor=total_input-np.dot(syst_obj.coefs_beam_equation_inertia_input,[0,0,syst_obj.link_base_acceleration[-1]])
     return syst_obj.ref[-1]-ref_to_motor
 
 def return_zero(*nonimportantargs):
