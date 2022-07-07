@@ -171,6 +171,84 @@ class Bypass:
     def get_action(self):
         self.action=np.append(self.action,self.syst.compensator.comp_ref[-1])
 
+class Estimator:
+    def __init__(self, function,syst=None, initial_values=[], initial_inputs=[], method='Modified Euler'):
+        self.function=function
+        self.syst=syst
+        if not (syst is None):
+            if function=='tip':
+                self.coefs=syst.coefs_beam_equation
+            elif function=='servo':
+                self.coefs = syst.coefs_servo_equation
+            else:
+                self.coefs=function
+        else:
+            self.coefs=function
+
+        self.ys = []
+        if len(initial_values)==0:
+            for i in range(len(self.coefs[0])-1):
+                self.ys.append(0)
+        else:
+            if len(self.coefs[0])-1==len(initial_values):
+                for value in initial_values:
+                    self.ys.append(value)
+            else:
+                raise Exception('initial value dimension is equal to ys list dimension')
+        if len(initial_inputs)==0:
+            for i in range(1,len(self.coefs)):
+                aux=[]
+                for i in range(len(self.coefs[i])):
+                    aux.append(0)
+                initial_inputs.append(aux)
+        else:
+
+            if len(self.coefs)-1==len(initial_inputs):
+                for i in range(1,len(self.coefs)):
+                    if not len(self.coefs[i])==len(initial_inputs[i-1]):
+                        raise Exception('initial inputs dimension is not coherent with coefs')
+            else:
+                raise Exception('initial inputs dimension is not coherent with coefs')
+
+        initial_input=0
+        for i in range(1,len(self.coefs)):
+            initial_input+=np.dot(initial_inputs[i-1],self.coefs[i])
+        new_highest_order = initial_input
+        for i in range(len(self.coefs[0]) - 1):
+            new_highest_order -= self.ys[i] * self.coefs[0][i]
+        new_highest_order /= self.coefs[0][-1]
+        self.ys.append(new_highest_order)
+
+        if method=='Euler':
+            self.estimator=euler_update
+
+        elif method=='Modified Euler':
+            self.estimator=modified_euler_update
+
+        elif method=='Aldrabated':
+            self.estimator = aldrabated
+
+        self.stored_ys=[self.ys]
+
+    def estimate(self,times,latest_inputs=[1]):
+
+        if not (self.syst is None):
+            if self.function=='tip':
+                self.coefs=self.syst.coefs_beam_equation
+            elif self.function=='servo':
+                self.coefs = self.syst.coefs_servo_equation
+            else:
+                self.coefs=self.function
+
+        output_coefs=self.coefs[0]
+        input_coefs=self.coefs[1:]
+        send_input=0
+
+        for coef_list,input_list in zip(input_coefs,latest_inputs):
+            send_input+=np.dot(coef_list,input_list)
+        self.ys=self.estimator(times,self.ys,send_input,output_coefs)
+        self.stored_ys.append(self.ys)
+
 def euler_update(times, prev_y, latest_input, coefs,subit=10):
     step=(times[-1]-times[-2])/subit
     #first iteration
@@ -264,84 +342,6 @@ def aldrabated(times, y, inputs, coefs):
     new_ys.append(new_dy)
     new_ys.append(new_d2y)
     return new_ys
-
-class Estimator:
-    def __init__(self, function,syst=None, initial_values=[], initial_inputs=[], method='Modified Euler'):
-        self.function=function
-        self.syst=syst
-        if not (syst is None):
-            if function=='tip':
-                self.coefs=syst.coefs_beam_equation
-            elif function=='servo':
-                self.coefs = syst.coefs_servo_equation
-            else:
-                self.coefs=function
-        else:
-            self.coefs=function
-
-        self.ys = []
-        if len(initial_values)==0:
-            for i in range(len(self.coefs[0])-1):
-                self.ys.append(0)
-        else:
-            if len(self.coefs[0])-1==len(initial_values):
-                for value in initial_values:
-                    self.ys.append(value)
-            else:
-                raise Exception('initial value dimension is equal to ys list dimension')
-        if len(initial_inputs)==0:
-            for i in range(1,len(self.coefs)):
-                aux=[]
-                for i in range(len(self.coefs[i])):
-                    aux.append(0)
-                initial_inputs.append(aux)
-        else:
-
-            if len(self.coefs)-1==len(initial_inputs):
-                for i in range(1,len(self.coefs)):
-                    if not len(self.coefs[i])==len(initial_inputs[i-1]):
-                        raise Exception('initial inputs dimension is not coherent with coefs')
-            else:
-                raise Exception('initial inputs dimension is not coherent with coefs')
-
-        initial_input=0
-        for i in range(1,len(self.coefs)):
-            initial_input+=np.dot(initial_inputs[i-1],self.coefs[i])
-        new_highest_order = initial_input
-        for i in range(len(self.coefs[0]) - 1):
-            new_highest_order -= self.ys[i] * self.coefs[0][i]
-        new_highest_order /= self.coefs[0][-1]
-        self.ys.append(new_highest_order)
-
-        if method=='Euler':
-            self.estimator=euler_update
-
-        elif method=='Modified Euler':
-            self.estimator=modified_euler_update
-
-        elif method=='Aldrabated':
-            self.estimator = aldrabated
-
-        self.stored_ys=[self.ys]
-
-    def estimate(self,times,latest_inputs=[1]):
-
-        if not (self.syst is None):
-            if self.function=='tip':
-                self.coefs=self.syst.coefs_beam_equation
-            elif self.function=='servo':
-                self.coefs = self.syst.coefs_servo_equation
-            else:
-                self.coefs=self.function
-
-        output_coefs=self.coefs[0]
-        input_coefs=self.coefs[1:]
-        send_input=0
-
-        for coef_list,input_list in zip(input_coefs,latest_inputs):
-            send_input+=np.dot(coef_list,input_list)
-        self.ys=self.estimator(times,self.ys,send_input,output_coefs)
-        self.stored_ys.append(self.ys)
 
 class Compensator(Calculus):
     def __init__(self, function='trace tf',optimized_coefs=[1.00759717,2*0.42202695/60.3151681,1/(60.3151681**2)]):

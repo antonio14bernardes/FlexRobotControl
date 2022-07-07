@@ -211,7 +211,7 @@ class Link:
                        'Average error':self.tip_analyser.avg_error,'Max torque':self.motor_analyser.max_torque}
 
 class Robot:
-    def __init__(self,const_t_int=True,num_samples=100):
+    def __init__(self,const_t_int=True,num_samples=100,input_ref=True,inverse_kinematics_details=None):
         self.links=[]
         self.pre_links=[]
         self.ref=[]
@@ -220,14 +220,18 @@ class Robot:
         self.time_interval=[0.02]
         self.const_t_int=const_t_int
         self.num_samples=num_samples
-
+        self.get_t_int_loop=False
+        self.input_ref=input_ref
+        self.inverse_kinematics_details=inverse_kinematics_details
 
     def add_link(self,link_controller,link_compensator,link_parameters):
         self.pre_links.append([link_controller,link_compensator,link_parameters])
 
-    def compile(self,details_inv_kin=None):
-        print('Compiling system...')
-        self.set_inverse_kinematics(details=details_inv_kin)
+    def compile(self):
+        if not self.get_t_int_loop:
+            print('Compiling system...')
+
+        self.set_inverse_kinematics(details=self.inverse_kinematics_details)
         for i in range(len(self.pre_links)):
             self.links.append(Link(controller=self.pre_links[i][0],compensator=self.pre_links[i][1],
                                    link_parameters=self.pre_links[i][-1]))
@@ -261,7 +265,7 @@ class Robot:
                                                          initial_inputs=[],method='Modified Euler')
         self.position=[[initial_x,0]]
 
-        self.set_inverse_kinematics(details=details_inv_kin)
+        self.set_inverse_kinematics(details=self.inverse_kinematics_details)
 
         if type(self.const_t_int)==bool:
             if self.const_t_int:
@@ -280,8 +284,8 @@ class Robot:
         if len(self.links)==1:
             self.get_angles=one_link_kinematics
 
-    def start(self,input_ref=True):
-        if input_ref:
+    def start(self):
+        if self.input_ref:
             print('Reference Input')
             new_ref_x=float(input('Input Initial Target in x (mm): '))
             new_ref_y=float(input('Input Initial Target in y (mm): '))
@@ -296,8 +300,9 @@ class Robot:
             new_angles=self.get_angles(new_ref,robot=self)
             self.angular_refs.append(new_angles)
         self.ref=[new_ref]
+        if not self.get_t_int_loop:
+            print('Running...')
 
-        print('Running...')
         self.start_time=time.time()
 
         for i in range(len(self.links)):
@@ -353,7 +358,8 @@ class Robot:
 
     def get_initial_time_gap(self,num_samples=100):
         print('Calculating average time with', num_samples, 'samples...')
-        robot_test=Robot(const_t_int=0.1)
+        robot_test=Robot(const_t_int=0.1,input_ref=False)
+        robot_test.get_t_int_loop=True
         for i in range(len(self.links)):
             cont_test=type(self.links[i].controller)()
             comp_test=type(self.links[i].compensator)(function=self.links[i].compensator.function,
@@ -361,7 +367,7 @@ class Robot:
             robot_test.add_link(link_controller=cont_test,link_compensator=comp_test,
                                 link_parameters=self.links[i].parameters)
         robot_test.compile()
-        robot_test.start(input_ref=False)
+        robot_test.start()
         while robot_test.times[-1]<0.5:
             robot_test.control()
             robot_test.update_times()
@@ -437,6 +443,16 @@ class Robot:
         if plot_coordinates or plot_angles:
 
             plt.show()
+
+    def run(self,run_time=0.5):
+        self.compile()
+        self.start()
+        while self.times[-1]<run_time:
+            self.control()
+            self.update_times()
+            self.estimate_positions()
+            self.update_ref()
+            self.update_geometry()
 
 def one_link_kinematics(angle,robot):
     return angle
