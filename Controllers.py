@@ -517,3 +517,69 @@ class Plotter:
             plt.plot(self.t,self.y[order,:],label='order '+str(order))
         plt.legend()
         plt.show()
+
+class References:
+    def __init__(self,initial_time,final_time,initial_values,final_values):
+        self.initial_time=initial_time
+        self.final_time=final_time
+        self.initial_values=initial_values
+        self.final_values=final_values
+        self.values=[initial_values]
+
+    def get_values(self,times):
+
+        if type(times)==list or type(times)==np.ndarray:
+            current_time=times[-1]
+        else:
+            current_time=times
+
+        new_values=[]
+        for initial_value, final_value in zip(self.initial_values,self.final_values):
+            new_value=(final_value-initial_value)*(current_time-self.initial_time)/(self.final_time-self.initial_time)+initial_value
+            new_values.append(new_value)
+        self.values.append(new_values)
+
+class Step(References):
+    def __init__(self,final_time,initial_time=0,xy_coordinates_step=[100,100]):
+        References.__init__(self,initial_time=initial_time,final_time=final_time,initial_values=xy_coordinates_step,
+                            final_values=xy_coordinates_step)
+        self.ref=self.values
+
+    def update_ref(self,times):
+        self.get_values(times)
+
+        self.ref=self.values
+
+class Ramp(References):
+    def __init__(self,final_time,initial_time=0,initial_xy=[300,0],final_xy=[100,100]):
+        References.__init__(self,initial_time=initial_time,final_time=final_time,initial_values=initial_xy,
+                            final_values=final_xy)
+        self.ref=self.values
+
+    def update_ref(self,times):
+        self.get_values(times)
+
+        self.ref=self.values
+
+class Circle(References):
+    def __init__(self,final_time,initial_time=0,radius=300,initial_angle=0,final_angle=360,angle_units='degrees'):
+        if angle_units=='degrees' or angle_units=='deg':
+            initial_angle=math.pi*initial_angle/180
+            final_angle=math.pi*final_angle/180
+        elif angle_units!='radians' and angle_units!='rad':
+            print("Awesome novel unit for angles.\nI'll just assume its radians anyway tho.")
+
+        initial_values=[radius,initial_angle]
+        final_values=[radius,final_angle]
+
+        References.__init__(self,initial_time=initial_time,final_time=final_time,initial_values=initial_values,
+                            final_values=final_values)
+        self.ref=[[radius*math.cos(initial_angle),radius*math.sin(initial_angle)]]
+
+    def update_ref(self,times):
+        self.get_values(times)
+
+        radius=self.values[-1][0]
+        new_angle=self.values[-1][1]
+
+        self.ref.append([radius*math.cos(new_angle),radius*math.sin(new_angle)])

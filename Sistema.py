@@ -9,7 +9,7 @@ import copy
 #import RPi.GPIO as GPIO
 
 class Link:
-    def __init__(self, link_parameters,controller=None,compensator=None,limit_action=False,constant_time_interval=True,):
+    def __init__(self, link_parameters,controller=None,compensator=None,limit_action=False,):
 
         self.parameters=link_parameters
 
@@ -85,6 +85,8 @@ class Link:
 
         self.numit=0
         self.ints=[]
+
+
         #print('WARNING!!\nCheck value time for first action limitation in limit action function')
 
 
@@ -211,23 +213,22 @@ class Link:
                        'Average error':self.tip_analyser.avg_error,'Max torque':self.motor_analyser.max_torque}
 
 class Robot:
-    def __init__(self,const_t_int=True,num_samples=100,input_ref=True,inverse_kinematics_details=None):
+    def __init__(self,inverse_kinematics_details=None):
         self.links=[]
         self.pre_links=[]
         self.ref=[]
         self.angular_refs=[]
         self.times=[0]
         self.time_interval=[0.02]
-        self.const_t_int=const_t_int
-        self.num_samples=num_samples
         self.get_t_int_loop=False
-        self.input_ref=input_ref
         self.inverse_kinematics_details=inverse_kinematics_details
+        self.first_ref=True
+        self.times_since_settle=[]
 
     def add_link(self,link_controller,link_compensator,link_parameters):
         self.pre_links.append([link_controller,link_compensator,link_parameters])
 
-    def compile(self):
+    def compile(self, const_t_int=True, num_samples=100):
         if not self.get_t_int_loop:
             print('Compiling system...')
 
@@ -267,16 +268,16 @@ class Robot:
 
         self.set_inverse_kinematics(details=self.inverse_kinematics_details)
 
-        if type(self.const_t_int)==bool:
-            if self.const_t_int:
+        if type(const_t_int)==bool:
+            if const_t_int:
                 self.times_updater=self.update_times_constant_interval
-                self.get_initial_time_gap(num_samples=self.num_samples)
+                self.get_initial_time_gap(num_samples=num_samples)
             else:
                 self.times_updater=self.update_real_times
 
         else:
             self.times_updater=self.update_times_constant_interval
-            self.time_interval=[self.const_t_int]
+            self.time_interval=[const_t_int]
 
     def set_inverse_kinematics(self,details=None):
         if len(self.links)==2:
@@ -284,21 +285,27 @@ class Robot:
         if len(self.links)==1:
             self.get_angles=one_link_kinematics
 
-    def start(self):
-        if self.input_ref:
-            print('Reference Input')
-            new_ref_x=float(input('Input Initial Target in x (mm): '))
-            new_ref_y=float(input('Input Initial Target in y (mm): '))
-            new_ref=[new_ref_x,new_ref_y]
-            new_angles=self.get_angles(new_ref,robot=self)
-            self.angular_refs.append(new_angles)
+    def start(self,ref_generator='-'):
+        self.ref_generator=ref_generator
+        if type(ref_generator)==str:
+            if ref_generator=='input':
+                print('Reference Input')
+                new_ref_x=float(input('Input Initial Target in x (mm): '))
+                new_ref_y=float(input('Input Initial Target in y (mm): '))
+                new_ref=[new_ref_x,new_ref_y]
+
+            else:
+                if len(self.links)==2:
+                    new_ref=[100,100]
+                elif len(self.links)==1:
+                    new_ref=[1]
+
         else:
-            if len(self.links)==2:
-                new_ref=[100,100]
-            elif len(self.links)==1:
-                new_ref=[1]
-            new_angles=self.get_angles(new_ref,robot=self)
-            self.angular_refs.append(new_angles)
+            new_ref=self.ref_generator.ref[-1]
+
+
+        new_angles=self.get_angles(new_ref,robot=self)
+        self.angular_refs.append(new_angles)
         self.ref=[new_ref]
         if not self.get_t_int_loop:
             print('Running...')
@@ -315,8 +322,9 @@ class Robot:
         for i in range(1,len(self.links)):
             self.links[-i-1].update_geometry()
 
-    def update_ref(self,bypass=True):
-        if bypass:
+    def update_ref(self,bypass=False,position_give=0.1,velocity_give=0.1,acceleration_give=0.1):
+        self.bypass=bypass
+        if self.bypass:
             self.ref.append(self.ref[-1])
             self.angular_refs.append(self.angular_refs[-1])
             for i in range(len(self.links)):
@@ -324,6 +332,7 @@ class Robot:
         else:
 
             if keyboard.is_pressed('ctrl+n'):
+                self.bypass=True
                 new_ref_x=float(input('Input Initial Target in x (mm): '))
                 new_ref_y=float(input('Input Initial Target in y (mm): '))
                 new_ref=[new_ref_x,new_ref_y]
@@ -333,8 +342,26 @@ class Robot:
                     self.links[i].ref.append(self.angular_refs[-1][i])
                     self.links[i].compensator.update()
             else:
-                self.ref.append(self.ref[-1])
-                self.angular_refs.append(self.angular_refs[-1])
+                if type(self.ref_generator)==str:
+                    self.ref.append(self.ref[-1])
+                    self.angular_refs.append(self.angular_refs[-1])
+                else:
+
+                    self.settled=check_settled(self,position_give,velocity_give,acceleration_give)
+                    if self.settled or not self.first_ref:
+                        if self.settled and self.first_ref:
+                            self.first_ref=False
+                            self.first_settle_time=self.times[-1]
+                        self.times_since_settle.append(self.times[-1]-self.first_settle_time)
+                        self.ref_generator.update_ref(self.times_since_settle)
+                        new_ref=self.ref_generator.ref[-1]
+                        new_angles=self.get_angles(new_ref,robot=self)
+
+                    else:
+                        new_ref=self.ref[-1]
+                        new_angles=self.get_angles(new_ref,robot=self)#self.angular_refs[-1]
+                    self.ref.append(new_ref)
+                    self.angular_refs.append(new_angles)
                 for i in range(len(self.links)):
                     self.links[i].ref.append(self.angular_refs[-1][i])
 
@@ -358,7 +385,7 @@ class Robot:
 
     def get_initial_time_gap(self,num_samples=100):
         print('Calculating average time with', num_samples, 'samples...')
-        robot_test=Robot(const_t_int=0.1,input_ref=False)
+        robot_test=Robot()
         robot_test.get_t_int_loop=True
         for i in range(len(self.links)):
             cont_test=type(self.links[i].controller)()
@@ -366,13 +393,13 @@ class Robot:
                                                       optimized_coefs=self.links[i].compensator.optimized_coefs)
             robot_test.add_link(link_controller=cont_test,link_compensator=comp_test,
                                 link_parameters=self.links[i].parameters)
-        robot_test.compile()
-        robot_test.start()
+        robot_test.compile(const_t_int=0.1,num_samples=num_samples)
+        robot_test.start(ref_generator='-')
         while robot_test.times[-1]<0.5:
             robot_test.control()
             robot_test.update_times()
             robot_test.estimate_positions()
-            robot_test.update_ref()
+            robot_test.update_ref(bypass=True)
             robot_test.update_geometry()
         current=time.time()
         self.time_interval=np.array([(current-robot_test.start_time)/num_samples])
@@ -391,7 +418,7 @@ class Robot:
 
         self.position.append([x,y])
 
-    def analyse(self,show_performance=True,plot_coordinates=True,plot_angles=True):
+    def analyse(self,show_performance=True,plot_trajectory=True,from_settled=False,plot_coordinates=True,plot_angles=True):
         self.analysis=[]
         for i in range(len(self.links)):
             self.links[i].get_analysis(ss_value=self.links[i].ref[-1])
@@ -405,12 +432,26 @@ class Robot:
                 else:
                     print(self.analysis[i],'\n')
 
+        if from_settled:
+            position=np.array(self.position[np.argwhere(self.times==self.first_settle_time)[0][0]+1:])
+            x,y=np.transpose(position)
+            times=self.times_since_settle
+
+        else:
+            position=np.array(self.position)
+            x,y=np.transpose(position)
+            times=self.times
+
+        if plot_trajectory:
+
+            plt.plot(x,y)
+
         if plot_coordinates and plot_angles:
 
             fig, axs = plt.subplots(len(self.links)+1,2,constrained_layout=True)
             position=np.array(self.position)
             position=np.transpose(position)
-            axs[0,0].plot(self.times, position[0])
+            axs[0,0].plot(self.times,position[0] )
             axs[0,0].set_title('X Position')
             axs[0,1].plot(self.times, position[1])
             axs[0,1].set_title('Y Position')
@@ -433,55 +474,56 @@ class Robot:
 
         elif plot_coordinates:
             fig, axs = plt.subplots(2,constrained_layout=True)
-            position=np.array(self.position)
-            position=np.transpose(position)
-            axs[0].plot(self.times, position[0])
+            axs[0].plot(self.times, x)
             axs[0].set_title('X Position')
-            axs[1].plot(self.times, position[1])
+            axs[1].plot(self.times, y)
             axs[1].set_title('Y Position')
 
-        if plot_coordinates or plot_angles:
+        if plot_coordinates or plot_angles or plot_trajectory:
 
             plt.show()
 
-    def run(self,run_time=0.5):
-        self.compile()
-        self.start()
+    def run(self,run_time=0.5,num_samples=100,ref_generator='-',const_t_int=True,position_give=0.1,velocity_give=0.1,acceleration_give=0.1):
+        self.compile(const_t_int,num_samples=num_samples)
+        self.start(ref_generator=ref_generator)
         while self.times[-1]<run_time:
             self.control()
             self.update_times()
             self.estimate_positions()
-            self.update_ref()
+            self.update_ref(position_give=position_give,velocity_give=velocity_give,acceleration_give=acceleration_give)
             self.update_geometry()
+
+
+def check_settled(robot,position_give,velocity_give,acceleration_give):
+    settled=False
+    links_settled=0
+    for link in robot.links:
+        if np.abs(link.tip_angle[-1]-link.ref[-1])<position_give and np.abs(link.tip_velocity[-1])<velocity_give and np.abs(link.tip_acceleration[-1])<acceleration_give:
+            links_settled+=1
+    if links_settled==len(robot.links):
+        settled=True
+
+    return settled
 
 def one_link_kinematics(angle,robot):
     return angle
 
 def two_link_inv_kin(cartesian_coords,robot):
     x,y=cartesian_coords
-    d=np.sqrt(x**2+y**2)
     l1=robot.links[0].lg
     l2=robot.links[1].lg
-    alpha_abs=math.acos((d**2+l1**2-l2**2)/(2*d*l1))
-    alpha_list=[-alpha_abs,alpha_abs]
-    theta1_list=[]
-    theta1_dif_list=[]
+    thetas=[]
+    thetas_dif=[]
     prev_theta1=robot.links[0].motor_angle[-1]
-    for alpha in alpha_list:
-        sum_t1_a=math.acos(x/d)
-        if d*math.sin(sum_t1_a)==-y:
-            sum_t1_a=-sum_t1_a
-        new_theta=sum_t1_a-alpha
-        theta1_list.append(new_theta)
-        theta1_dif_list.append(np.abs(new_theta-prev_theta1))
-    theta1=theta1_list[np.argmin(theta1_list)]
-    sum_t1_t2=math.acos((x-l1*math.cos(theta1))/l2)
-    if l1*math.sin(theta1)+l2*math.sin(sum_t1_t2)==-y:
-        sum_t1_t2=-sum_t1_t2
-    theta2=sum_t1_t2-theta1
-
-    return [theta1,theta2]
-
+    prev_theta2=robot.links[1].motor_angle[-1]
+    cos_theta2=(x**2+y**2-l1**2-l2**2)/(2*l1*l2)
+    for sign in [-1,1]:
+        theta2=sign*math.acos(cos_theta2)
+        theta1=math.atan(y/x)-math.atan((l2*math.sin(theta2))/(l1+l2*cos_theta2))
+        thetas.append([theta1,theta2])
+        thetas_dif.append([theta1-prev_theta1,theta2-prev_theta2])
+    best_thetas=thetas[np.argmax(np.sum(thetas_dif,axis=1))]
+    return best_thetas
 
 def limit_control_action_old(action_y,pos,t,limit_values,time_interval,limit_bool):
     value=action_y[-1]
